@@ -12,6 +12,9 @@ from scanner_logic import (
     _standard_deviation_for_sport,
     find_arbitrage_opportunities,
     scan_pinnacle_ev,
+    evaluate_arbitrage_opportunity,
+    format_arbitrage_evaluation,
+    market_integrity,
 )
 
 
@@ -1189,6 +1192,126 @@ class PlayerPropAndArbitrageSafetyTests(unittest.TestCase):
         self.assertEqual(
             find_arbitrage_opportunities(quotes, 1000, now=NOW), []
         )
+
+
+class ArbitrageEvaluationTests(unittest.TestCase):
+    def _candidate(self, **overrides):
+        candidate = {
+            "sport": "NFL",
+            "matchup": "Denver Broncos vs Las Vegas Raiders",
+            "market": "Spread",
+            "constraints": {
+                "min_depth_dollars": 150,
+                "max_stake_per_bet": 300,
+                "bankroll_cap": 1000,
+                "min_profit_dollars": 20,
+                "min_roi_pct": 1.5,
+            },
+            "leg_1": {
+                "venue": "FanDuel",
+                "type": "sportsbook",
+                "selection": "Raiders +13.5",
+                "decimal_odds": 2.05,
+                "max_allowed_stake": 500,
+            },
+            "leg_2": {
+                "venue": "Novig",
+                "type": "exchange",
+                "selection": "Broncos -13.5",
+                "exchange_fee_pct": 0.0,
+                "order_book_asks_or_implied": [
+                    {"decimal_odds": 2.08, "available_stake": 120},
+                    {"decimal_odds": 2.02, "available_stake": 250},
+                    {"decimal_odds": 1.95, "available_stake": 500},
+                ],
+            },
+        }
+        for key, value in overrides.items():
+            if key == "constraints":
+                candidate["constraints"].update(value)
+            elif key == "leg_1":
+                candidate["leg_1"].update(value)
+            elif key == "leg_2":
+                candidate["leg_2"].update(value)
+            else:
+                candidate[key] = value
+        return candidate
+
+    def test_market_integrity_requires_opposite_spreads(self):
+        ok, _ = market_integrity(self._candidate())
+        self.assertTrue(ok)
+        bad = self._candidate()
+        bad["leg_2"]["selection"] = "Broncos +13.5"
+        ok, msg = market_integrity(bad)
+        self.assertFalse(ok)
+        self.assertIn("not opposite", msg)
+
+    def test_depth_below_minimum_is_rejected(self):
+        candidate = self._candidate()
+        candidate["leg_2"]["order_book_asks_or_implied"] = [
+            {"decimal_odds": 2.08, "available_stake": 100}
+        ]
+        result = evaluate_arbitrage_opportunity(candidate)
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertIn("depth", result["binding_bottleneck"].lower())
+
+    def test_candidate_from_prompt_is_rejected_for_profit(self):
+        result = evaluate_arbitrage_opportunity(self._candidate())
+        self.assertEqual(result["status"], "REJECTED")
+        rec = result["recommended_stakes_payouts"]
+        self.assertEqual(rec["net_guaranteed_profit"], 0.0)
+        self.assertGreater(
+            result["effective_odds_fees"]["depth_at_or_above_break_even"], 150
+        )
+
+    def test_instant_take_when_thresholds_met(self):
+        candidate = self._candidate()
+        candidate["constraints"]["min_profit_dollars"] = 5
+        candidate["constraints"]["min_roi_pct"] = 1.0
+        result = evaluate_arbitrage_opportunity(candidate)
+        self.assertEqual(result["status"], "INSTANT_TAKE")
+        rec = result["recommended_stakes_payouts"]
+        self.assertGreater(rec["net_guaranteed_profit"], 5)
+        self.assertGreaterEqual(rec["roi_pct"], 1.0)
+        self.assertAlmostEqual(
+            rec["locked_payout"],
+            rec["exchange_leg_stake"] * result["effective_odds_fees"][
+                "volume_weighted_exchange_odds"
+            ],
+            places=2,
+        )
+
+    def test_partial_fill_worst_case_is_reported(self):
+        result = evaluate_arbitrage_opportunity(self._candidate())
+        import re
+        self.assertIn("worst-case loss", result["partial_fill_warning"])
+        match = re.search(r"worst-case loss is \$([\d,]+\.\d{2})", result["partial_fill_warning"])
+        self.assertIsNotNone(match)
+        self.assertGreater(float(match.group(1).replace(",", "")), 0)
+
+    def test_exchange_fee_reduces_effective_odds(self):
+        candidate = self._candidate()
+        candidate["constraints"]["min_profit_dollars"] = 1
+        candidate["constraints"]["min_roi_pct"] = 0.5
+        candidate["leg_2"]["exchange_fee_pct"] = 0.02
+        result = evaluate_arbitrage_opportunity(candidate)
+        self.assertEqual(result["status"], "INSTANT_TAKE")
+        self.assertLess(
+            result["effective_odds_fees"]["volume_weighted_exchange_odds"],
+            2.08,
+        )
+
+    def test_format_output_contains_required_sections(self):
+        result = evaluate_arbitrage_opportunity(self._candidate())
+        text = format_arbitrage_evaluation(result)
+        for section in (
+            "Status:",
+            "Effective Odds & Fees:",
+            "Binding Liquidity Bottleneck:",
+            "Recommended Stakes & Payouts:",
+            "Partial-Fill / Execution Warning:",
+        ):
+            self.assertIn(section, text)
 
 
 if __name__ == "__main__":

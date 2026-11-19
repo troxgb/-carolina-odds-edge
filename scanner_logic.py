@@ -1128,6 +1128,302 @@ def _compatible_market_lines(
     return True
 
 
+def _spread_line_from_selection(selection: Any) -> float | None:
+    if not isinstance(selection, str):
+        return None
+    for token in reversed(selection.split()):
+        try:
+            value = float(token)
+        except (TypeError, ValueError):
+            continue
+        if isfinite(value):
+            return value
+    return None
+
+
+def market_integrity(candidate: dict[str, Any]) -> tuple[bool, str]:
+    """Verify the two legs are opposite, mutually exclusive outcomes."""
+    market = str(candidate.get("market") or "").casefold()
+    leg1 = candidate.get("leg_1") or {}
+    leg2 = candidate.get("leg_2") or {}
+    selection1 = str(leg1.get("selection") or "").strip()
+    selection2 = str(leg2.get("selection") or "").strip()
+    if not selection1 or not selection2:
+        return False, "Both selections must be present."
+    if market.startswith("spread"):
+        line1 = _spread_line_from_selection(selection1)
+        line2 = _spread_line_from_selection(selection2)
+        if line1 is None or line2 is None:
+            return False, "Could not parse spread lines from the selections."
+        if line1 == 0 or line2 == 0 or line1 != -line2:
+            return (
+                False,
+                f"Selections are not opposite equal-magnitude spreads "
+                f"({line1:g} vs {line2:g}).",
+            )
+        return True, f"Opposite spreads of equal magnitude ({line1:g} / {line2:g})."
+    if selection1.casefold() == selection2.casefold():
+        return False, "Selections are identical, not mutually exclusive."
+    return True, "Distinct selections on the same market."
+
+
+def break_even_exchange_odds(leg1_decimal_odds: float) -> float:
+    """Minimum exchange decimal odds that keep the arb non-negative."""
+    if not isfinite(leg1_decimal_odds) or leg1_decimal_odds <= 1:
+        return float("inf")
+    return leg1_decimal_odds / (leg1_decimal_odds - 1.0)
+
+
+def exchange_effective_odds(
+    levels: list[dict[str, Any]], stake: float, fee_pct: float = 0.0
+) -> tuple[float | None, float]:
+    """Volume-weighted exchange decimal odds for ``stake``, after fees."""
+    if not isfinite(stake) or stake <= 0:
+        return None, 0.0
+    ordered = sorted(
+        levels, key=lambda level: float(level.get("decimal_odds", 0.0)), reverse=True
+    )
+    remaining = float(stake)
+    weighted_price = 0.0
+    filled = 0.0
+    for level in ordered:
+        if remaining <= 1e-9:
+            break
+        price = float(level.get("decimal_odds", 0.0))
+        available = float(level.get("available_stake", 0.0))
+        if not isfinite(price) or price <= 1 or not isfinite(available) or available <= 0:
+            continue
+        take = min(remaining, available)
+        weighted_price += take * price
+        filled += take
+        remaining -= take
+    if filled <= 0:
+        return None, 0.0
+    gross = weighted_price / filled
+    net = 1.0 + (gross - 1.0) * (1.0 - fee_pct)
+    return net, filled
+
+
+def evaluate_arbitrage_opportunity(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Evaluate a candidate arb with order-book depth and execution risk."""
+    leg1 = candidate.get("leg_1") or {}
+    leg2 = candidate.get("leg_2") or {}
+    constraints = candidate.get("constraints") or {}
+    levels = list(leg2.get("order_book_asks_or_implied") or [])
+
+    min_depth = float(constraints.get("min_depth_dollars", 0.0))
+    max_stake_per_bet = float(constraints.get("max_stake_per_bet", float("inf")))
+    bankroll_cap = float(constraints.get("bankroll_cap", float("inf")))
+    min_profit = float(constraints.get("min_profit_dollars", 0.0))
+    min_roi = float(constraints.get("min_roi_pct", 0.0))
+    fee_pct = float(leg2.get("exchange_fee_pct", 0.0))
+
+    integrity_ok, integrity_msg = market_integrity(candidate)
+
+    result: dict[str, Any] = {
+        "sport": candidate.get("sport"),
+        "matchup": candidate.get("matchup"),
+        "market": candidate.get("market"),
+        "market_integrity": {"ok": integrity_ok, "message": integrity_msg},
+        "status": None,
+        "effective_odds_fees": {},
+        "binding_bottleneck": None,
+        "recommended_stakes_payouts": {},
+        "partial_fill_warning": "",
+    }
+
+    if not integrity_ok:
+        result["status"] = "INVALID"
+        result["partial_fill_warning"] = integrity_msg
+        return result
+
+    try:
+        odds1 = float(leg1.get("decimal_odds"))
+    except (TypeError, ValueError):
+        result["status"] = "INVALID"
+        result["partial_fill_warning"] = "Leg 1 decimal odds are invalid."
+        return result
+    if not isfinite(odds1) or odds1 <= 1:
+        result["status"] = "INVALID"
+        result["partial_fill_warning"] = "Leg 1 decimal odds are invalid."
+        return result
+
+    sportsbook_max = float(leg1.get("max_allowed_stake", max_stake_per_bet))
+    break_even = break_even_exchange_odds(odds1)
+    depth_at_be = sum(
+        float(level.get("available_stake", 0.0))
+        for level in levels
+        if isfinite(float(level.get("decimal_odds", 0.0)))
+        and float(level.get("decimal_odds", 0.0)) >= break_even - 1e-9
+    )
+
+    top_level_odds = max(
+        (float(level.get("decimal_odds", 0.0)) for level in levels), default=0.0
+    )
+    top_level_depth = sum(
+        float(level.get("available_stake", 0.0))
+        for level in levels
+        if isfinite(float(level.get("decimal_odds", 0.0)))
+        and abs(float(level.get("decimal_odds", 0.0)) - top_level_odds) <= 1e-9
+    )
+
+    result["effective_odds_fees"] = {
+        "leg1_headline_decimal_odds": odds1,
+        "leg2_headline_decimal_odds": top_level_odds,
+        "break_even_exchange_odds": break_even,
+        "exchange_fee_pct": fee_pct,
+        "depth_at_or_above_break_even": depth_at_be,
+        "min_depth_dollars": min_depth,
+    }
+
+    if depth_at_be < min_depth - 1e-9:
+        result["status"] = "REJECTED"
+        result["binding_bottleneck"] = (
+            f"Exchange depth at/above break-even is ${depth_at_be:,.2f}, "
+            f"below min_depth_dollars ${min_depth:,.2f}."
+        )
+        result["partial_fill_warning"] = (
+            "Insufficient executable depth; do not place the sportsbook leg."
+        )
+        return result
+
+    max_s2 = min(depth_at_be, max_stake_per_bet, bankroll_cap)
+    # Search the largest exchange stake (in cents) that clears every constraint.
+    best: tuple[float, float, float, float, float, float, float] | None = None
+    cents_max = int(round(max_s2 * 100.0))
+    for cents in range(0, cents_max + 1):
+        s2 = cents / 100.0
+        if s2 <= 0:
+            continue
+        net_odds, filled = exchange_effective_odds(levels, s2, fee_pct)
+        if net_odds is None or filled + 1e-9 < s2:
+            continue
+        s1 = s2 * net_odds / odds1
+        total = s1 + s2
+        profit = s2 * net_odds - total
+        roi = (profit / total * 100.0) if total > 0 else 0.0
+        if (
+            s1 <= sportsbook_max + 1e-9
+            and s1 <= max_stake_per_bet + 1e-9
+            and s2 <= max_stake_per_bet + 1e-9
+            and total <= bankroll_cap + 1e-9
+            and profit >= min_profit - 1e-9
+            and roi >= min_roi - 1e-9
+        ):
+            best = (s2, s1, total, profit, roi, net_odds, filled)
+
+    # Identify the binding constraint for reporting.
+    constraint_values = {
+        "exchange_depth_at_break_even": depth_at_be,
+        "max_stake_per_bet": max_stake_per_bet,
+        "bankroll_cap": bankroll_cap,
+        "sportsbook_max_allowed_stake_(as_exchange_equiv)": sportsbook_max * odds1 / 2.0
+        if odds1 > 1
+        else sportsbook_max,
+    }
+    binding_name = min(constraint_values, key=lambda name: constraint_values[name])
+    binding_value = constraint_values[binding_name]
+
+    # Worst-case partial fill: Leg 1 sized for the target, only top level fills.
+    target_s2 = best[0] if best is not None else max_s2
+    if best is not None:
+        target_net_odds = best[5]
+    else:
+        target_net_odds = exchange_effective_odds(levels, max_s2, fee_pct)[0]
+        if target_net_odds is None:
+            target_net_odds = top_level_odds
+    target_s1 = target_s2 * target_net_odds / odds1 if target_s2 > 0 else 0.0
+    partial_fill_qty = min(top_level_depth, target_s2)
+    partial_outlay = target_s1 + partial_fill_qty
+    partial_payout = min(target_s1 * odds1, partial_fill_qty * top_level_odds)
+    worst_case_loss = partial_outlay - partial_payout
+
+    result["binding_bottleneck"] = (
+        f"{binding_name} at ${binding_value:,.2f} "
+        f"(exchange depth usable ${depth_at_be:,.2f})."
+    )
+
+    if best is None:
+        result["status"] = "REJECTED"
+        max_depth_odds, _ = exchange_effective_odds(levels, max_s2, fee_pct)
+        if max_depth_odds is None:
+            max_depth_odds = 0.0
+        max_achievable_profit = max_s2 * max_depth_odds - (
+            max_s2 * max_depth_odds / odds1 + max_s2
+        )
+        if max_achievable_profit < 0:
+            max_achievable_profit = 0.0
+        result["recommended_stakes_payouts"] = {
+            "executable_exchange_stake": 0.0,
+            "sportsbook_stake": 0.0,
+            "total_stake": 0.0,
+            "locked_payout": 0.0,
+            "net_guaranteed_profit": 0.0,
+            "roi_pct": 0.0,
+            "max_achievable_profit": round(max_achievable_profit, 2),
+        }
+        result["partial_fill_warning"] = (
+            f"No stake clears min_profit_dollars ${min_profit:,.2f} and "
+            f"min_roi_pct {min_roi:.2f}%. Best available depth yields at most "
+            f"${max_achievable_profit:,.2f} "
+            f"guaranteed profit under the binding constraints. Leg 1 must not be placed. If it were placed for "
+            f"${target_s1:,.2f} and the hedge only partially filled "
+            f"({partial_fill_qty:,.2f} @ {top_level_odds:.4f}), worst-case loss "
+            f"is ${worst_case_loss:,.2f}."
+        )
+        return result
+
+    s2, s1, total, profit, roi, net_odds, filled = best
+    result["status"] = "INSTANT_TAKE"
+    result["effective_odds_fees"]["volume_weighted_exchange_odds"] = net_odds
+    result["effective_odds_fees"]["exchange_filled_stake"] = filled
+    result["recommended_stakes_payouts"] = {
+        "exchange_leg_stake": round(s2, 2),
+        "sportsbook_leg_stake": round(s1, 2),
+        "total_stake": round(total, 2),
+        "locked_payout": round(s2 * net_odds, 2),
+        "net_guaranteed_profit": round(profit, 2),
+        "roi_pct": round(roi, 4),
+    }
+    result["partial_fill_warning"] = (
+        f"Instant fill available across {len(levels)} level(s). If Leg 1 is locked "
+        f"and the hedge partially fills to only {partial_fill_qty:,.2f} @ "
+        f"{top_level_odds:.4f}, worst-case loss is ${worst_case_loss:,.2f}. "
+        f"Resting a limit order is not required for the recommended size."
+    )
+    return result
+
+
+def format_arbitrage_evaluation(result: dict[str, Any]) -> str:
+    """Render an evaluation dict as the required concise breakdown."""
+    lines = []
+    lines.append(f"Status: {result.get('status')}")
+    eff = result.get("effective_odds_fees", {})
+    lines.append(
+        "Effective Odds & Fees: "
+        f"Leg1 {eff.get('leg1_headline_decimal_odds')} vs Leg2 headline "
+        f"{eff.get('leg2_headline_decimal_odds')}; break-even exchange "
+        f"{eff.get('break_even_exchange_odds')}; volume-weighted "
+        f"{eff.get('volume_weighted_exchange_odds', 'n/a')}; "
+        f"fee {eff.get('exchange_fee_pct', 0) * 100:.2f}%; "
+        f"depth at/above break-even ${eff.get('depth_at_or_above_break_even', 0):,.2f} "
+        f"(min ${eff.get('min_depth_dollars', 0):,.2f})."
+    )
+    lines.append(f"Binding Liquidity Bottleneck: {result.get('binding_bottleneck')}")
+    rec = result.get("recommended_stakes_payouts", {})
+    lines.append(
+        "Recommended Stakes & Payouts: "
+        f"exchange ${rec.get('exchange_leg_stake', rec.get('executable_exchange_stake', 0)):,.2f}, "
+        f"sportsbook ${rec.get('sportsbook_leg_stake', rec.get('sportsbook_stake', 0)):,.2f}, "
+        f"total ${rec.get('total_stake', 0):,.2f}, "
+        f"locked payout ${rec.get('locked_payout', 0):,.2f}, "
+        f"net profit ${rec.get('net_guaranteed_profit', 0):,.2f}, "
+        f"ROI {rec.get('roi_pct', 0):.4f}%."
+    )
+    lines.append(f"Partial-Fill / Execution Warning: {result.get('partial_fill_warning')}")
+    return "\n".join(lines)
+
+
 def _allocate_rounded_stakes(
     odds: list[float], total_stake: int, rounding_step: int, target_stakes: list[float]
 ) -> list[int] | None:
