@@ -8,4 +8,6 @@ vendor/
 !.env.example
 .streamlit/secrets.toml
 quota_state.json
+freshness_cache.json
+injuries_cache_*.json
 *.tmp
