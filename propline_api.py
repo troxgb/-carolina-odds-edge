@@ -1043,6 +1043,27 @@ def run_api(
     return result
 
 
+def fetch_sport_events(sport_label: str, api_key: str) -> list[dict[str, Any]]:
+    # Free-tier event list used for active-sport detection. Returns [] on any error.
+    sport_key = SPORT_CONFIG.get(sport_label)
+    if not sport_key or not api_key or not api_key.strip():
+        return []
+    session = _new_api_session()
+    try:
+        response = session.get(
+            f"{API_BASE_URL}/sports/{sport_key}/events",
+            headers={"X-API-Key": api_key.strip()},
+            timeout=CONFIG.api_timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, list) else []
+    except (requests.RequestException, ValueError):
+        return []
+    finally:
+        session.close()
+
+
 # ---------------------------------------------------------------------------
 # Free-tier enrichments: freshness (no auth) and injury reports
 # ---------------------------------------------------------------------------

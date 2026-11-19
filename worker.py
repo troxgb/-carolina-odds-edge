@@ -21,7 +21,7 @@ import socket
 import sys
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
 from uuid import uuid4
@@ -46,6 +46,7 @@ from propline_api import (
     SPORT_CONFIG,
     fetch_freshness,
     fetch_injuries,
+    fetch_sport_events,
     injured_player_names,
     record_quota,
     run_api,
@@ -55,6 +56,7 @@ from propline_api import (
 from scanner_config import CONFIG
 from scanner_logic import (
     _normalize_player_name,
+    _parse_utc,
     find_arbitrage_opportunities,
     is_player_prop_quote,
     scan_pinnacle_ev,
@@ -1247,7 +1249,40 @@ def run_worker(
         }
 
     cached_payload = load_cached_odds(cache_file)
-    scan_sports = sports or select_scan_sports(ACTIVE_SPORTS, cached_payload)
+    if sports is not None:
+        scan_sports = list(sports)
+    else:
+        # Dynamic active-sport selection (cached 6h; ~6 requests/day, quota-counted).
+        events_cache = _load_cached_json("sport_events_cache.json", 21600)
+        events_by_sport: dict[str, list[dict[str, Any]]] = {}
+        if events_cache is None:
+            api_key_for_events = (keys_to_use[0] if "keys_to_use" in locals() and keys_to_use else None) or os.getenv(
+                "PROPLINE_API_KEY_1", os.getenv("PROPLINE_API_KEY", "")
+            )
+            for sport in ACTIVE_SPORTS:
+                events_by_sport[sport] = fetch_sport_events(sport, api_key_for_events)
+            _save_cached_json("sport_events_cache.json", {"events": events_by_sport})
+        else:
+            events_by_sport = events_cache.get("events", {}) or {}
+        now_for_events = datetime.now(timezone.utc)
+        cutoff = now_for_events + timedelta(hours=36)
+        scan_sports = []
+        for sport in ACTIVE_SPORTS:
+            has_upcoming = False
+            for event in events_by_sport.get(sport, []) or []:
+                if event.get("completed"):
+                    continue
+                if event.get("live"):
+                    has_upcoming = True
+                    break
+                commence = _parse_utc(event.get("commence_time"))
+                if commence is not None and now_for_events <= commence <= cutoff:
+                    has_upcoming = True
+                    break
+            if has_upcoming:
+                scan_sports.append(sport)
+        if not scan_sports:
+            scan_sports = select_scan_sports(ACTIVE_SPORTS, cached_payload)
 
     if api_keys:
         keys_to_use = [key for key in api_keys if key and key.strip()]

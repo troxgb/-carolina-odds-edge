@@ -10,4 +10,5 @@ vendor/
 quota_state.json
 freshness_cache.json
 injuries_cache_*.json
+sport_events_cache.json
 *.tmp
