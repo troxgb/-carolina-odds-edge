@@ -63,16 +63,40 @@ from scanner_logic import (
     size_arbitrage_stakes,
 )
 
-# Active sports to scan (MLB is omitted during the offseason).
+# Master list of sports the worker is allowed to consider. Auto-selection below
+# further restricts this to high-volume Tier 1 sports plus Tennis (Tier 2), and
+# only when they have an upcoming game within the next 7 days. Tier 3 sports
+# (golf, racing, esports, etc.) are never auto-included to avoid thin markets
+# and elevated limit/ban risk; add them here manually if desired.
 ACTIVE_SPORTS = [
     "Tennis",
     "NCAAB",
     "NBA",
+    "WNBA",
     "NHL",
     "NFL",
     "NCAAF",  # College Football (CFB)
+    "UFC",
     # "MLB",  # Offseason
+    # "MLS",  # Optional: lower volume, add manually if desired
 ]
+
+# Sports that are safe to auto-scan: high betting volume + exchange coverage.
+# Everything else requires an explicit entry in ACTIVE_SPORTS above AND a manual
+# opt-in (kept out of this set so thin/obscure markets are never auto-scanned).
+AUTO_INCLUDE_SPORTS = {
+    "NFL",
+    "NCAAF",
+    "NBA",
+    "WNBA",
+    "NCAAB",
+    "NHL",
+    "UFC",
+    "Tennis",
+}
+
+# How far ahead a sport needs an event to be considered "in season".
+SPORT_LOOKAHEAD_DAYS = 7
 
 ALERT_HISTORY_FILE = "alert_history.json"
 CACHED_ODDS_FILE = "cached_odds.json"
@@ -1253,6 +1277,9 @@ def run_worker(
         scan_sports = list(sports)
     else:
         # Dynamic active-sport selection (cached 6h; ~6 requests/day, quota-counted).
+        # Only Tier 1 + Tennis are ever auto-included, and only when they have an
+        # upcoming game within SPORT_LOOKAHEAD_DAYS. This keeps thin/obscure
+        # markets (and their limit/ban risk) out of the scan automatically.
         events_cache = _load_cached_json("sport_events_cache.json", 21600)
         events_by_sport: dict[str, list[dict[str, Any]]] = {}
         if events_cache is None:
@@ -1260,14 +1287,18 @@ def run_worker(
                 "PROPLINE_API_KEY_1", os.getenv("PROPLINE_API_KEY", "")
             )
             for sport in ACTIVE_SPORTS:
+                if sport not in AUTO_INCLUDE_SPORTS:
+                    continue
                 events_by_sport[sport] = fetch_sport_events(sport, api_key_for_events)
             _save_cached_json("sport_events_cache.json", {"events": events_by_sport})
         else:
             events_by_sport = events_cache.get("events", {}) or {}
         now_for_events = datetime.now(timezone.utc)
-        cutoff = now_for_events + timedelta(hours=36)
+        cutoff = now_for_events + timedelta(days=SPORT_LOOKAHEAD_DAYS)
         scan_sports = []
         for sport in ACTIVE_SPORTS:
+            if sport not in AUTO_INCLUDE_SPORTS:
+                continue
             has_upcoming = False
             for event in events_by_sport.get(sport, []) or []:
                 if event.get("completed"):
@@ -1282,7 +1313,9 @@ def run_worker(
             if has_upcoming:
                 scan_sports.append(sport)
         if not scan_sports:
-            scan_sports = select_scan_sports(ACTIVE_SPORTS, cached_payload)
+            scan_sports = select_scan_sports(
+                [s for s in ACTIVE_SPORTS if s in AUTO_INCLUDE_SPORTS], cached_payload
+            )
 
     if api_keys:
         keys_to_use = [key for key in api_keys if key and key.strip()]

@@ -82,6 +82,10 @@ class ScannerConfig:
             ("player_points", "player_rebounds", "player_assists"),
         ),
         (
+            "basketball_wnba",
+            ("player_points", "player_rebounds", "player_assists"),
+        ),
+        (
             "basketball_ncaab",
             ("player_points", "player_rebounds", "player_assists"),
         ),
