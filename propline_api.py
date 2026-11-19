@@ -1041,3 +1041,97 @@ def run_api(
 
     result["failover_used"] = False
     return result
+
+
+# ---------------------------------------------------------------------------
+# Free-tier enrichments: freshness (no auth) and injury reports
+# ---------------------------------------------------------------------------
+
+
+def fetch_freshness() -> dict[str, Any]:
+    """Fetch per-book staleness from /v1/freshness (no API key required)."""
+    session = _new_api_session()
+    try:
+        response = session.get(f"{API_BASE_URL}/freshness", timeout=CONFIG.api_timeout_seconds)
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+    except (requests.RequestException, ValueError):
+        return {}
+    finally:
+        session.close()
+
+
+def stale_book_keys(freshness: dict[str, Any], max_age_seconds: int | None = None) -> set[str]:
+    """Return bookmaker keys whose game-line or prop board is stale."""
+    threshold = max_age_seconds
+    if threshold is None:
+        try:
+            threshold = int(freshness.get("stale_threshold_seconds", 0) or 0)
+        except (TypeError, ValueError):
+            threshold = 0
+    if not threshold:
+        threshold = 300
+    stale: set[str] = set()
+    for book in freshness.get("bookmakers", []) or []:
+        if not isinstance(book, dict):
+            continue
+        key = str(book.get("key") or "").strip().lower()
+        if not key:
+            continue
+        if book.get("is_stale"):
+            stale.add(key)
+            continue
+        for class_name in ("game_lines", "props"):
+            info = (book.get("market_classes") or {}).get(class_name, {})
+            if not isinstance(info, dict):
+                continue
+            if info.get("is_stale"):
+                stale.add(key)
+                break
+            staleness = info.get("staleness_seconds")
+            if staleness is not None and int(staleness) > threshold:
+                stale.add(key)
+                break
+        if key in stale:
+            continue
+        worst = book.get("worst_staleness_seconds")
+        if worst is not None and int(worst) > threshold * 2:
+            stale.add(key)
+    return stale
+
+
+def fetch_injuries(sport_label: str, api_key: str) -> list[dict[str, Any]]:
+    """Fetch the current injury report for a sport (free tier, any key)."""
+    sport_key = SPORT_CONFIG.get(sport_label)
+    if not sport_key or not api_key or not api_key.strip():
+        return []
+    session = _new_api_session()
+    url = f"{API_BASE_URL}/sports/{sport_key}/injuries"
+    try:
+        response = session.get(url, headers={"X-API-Key": api_key.strip()}, timeout=CONFIG.api_timeout_seconds)
+        response.raise_for_status()
+        payload = response.json()
+        players = payload.get("players") if isinstance(payload, dict) else None
+        return players if isinstance(players, list) else []
+    except (requests.RequestException, ValueError):
+        return []
+    finally:
+        session.close()
+
+
+def injured_player_names(injuries: list[dict[str, Any]], statuses: set[str] | None = None) -> set[str]:
+    """Return normalized player names whose status is in ``statuses``."""
+    if statuses is None:
+        statuses = {"out", "doubtful", "questionable", "day_to_day"}
+    names: set[str] = set()
+    for player in injuries or []:
+        if not isinstance(player, dict):
+            continue
+        code = str(player.get("status_code") or "").strip().lower()
+        if code not in statuses:
+            continue
+        name = " ".join(str(player.get("player_name") or "").split()).casefold()
+        if name:
+            names.add(name)
+    return names

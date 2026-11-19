@@ -43,12 +43,18 @@ except ImportError:  # pragma: no cover
 
 from ev_engine import calculate_capped_kelly_stakes, decimal_to_american
 from propline_api import (
+    SPORT_CONFIG,
+    fetch_freshness,
+    fetch_injuries,
+    injured_player_names,
     record_quota,
     run_api,
     select_api_keys,
+    stale_book_keys,
 )
 from scanner_config import CONFIG
 from scanner_logic import (
+    _normalize_player_name,
     find_arbitrage_opportunities,
     is_player_prop_quote,
     scan_pinnacle_ev,
@@ -191,6 +197,28 @@ def _atomic_write_text(path: str, text: str) -> None:
 
 def _atomic_write_json(path: str, data: Any) -> None:
     _atomic_write_text(path, json.dumps(data, indent=2))
+
+
+def _load_cached_json(path: str, ttl_seconds: float) -> dict[str, Any] | None:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    cached_at = payload.get("_cached_at")
+    if not isinstance(cached_at, (int, float)):
+        return None
+    if time.time() - float(cached_at) > ttl_seconds:
+        return None
+    return payload
+
+
+def _save_cached_json(path: str, data: dict[str, Any]) -> None:
+    payload = dict(data)
+    payload["_cached_at"] = time.time()
+    _atomic_write_json(path, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -1294,8 +1322,71 @@ def run_worker(
 
     print(f"Fetched {len(quotes)} quotes across {len(scan_sports)} sports.")
 
+    # Free-tier freshness (no auth, not quota-counted): drop quotes from stale books.
+    freshness_cache = os.getenv("FRESHNESS_CACHE_FILE", "freshness_cache.json")
+    freshness_payload = _load_cached_json(freshness_cache, 300)
+    if freshness_payload is None:
+        freshness_payload = {"data": fetch_freshness()}
+        _save_cached_json(freshness_cache, freshness_payload)
+    freshness_data = (
+        freshness_payload.get("data", {})
+        if isinstance(freshness_payload, dict)
+        else {}
+    )
+    stale_books = stale_book_keys(freshness_data)
+    if stale_books:
+        before = len(quotes)
+        quotes = [
+            quote
+            for quote in quotes
+            if str(quote.get("bookmaker_key") or "").strip().lower()
+            not in stale_books
+        ]
+        print(
+            f"Freshness: dropped {before - len(quotes)} quotes from stale books "
+            f"({', '.join(sorted(stale_books))})."
+        )
+
+    # Free-tier injuries: skip props for injured/questionable players (cached 1h).
+    skip_statuses = {
+        status.strip().lower()
+        for status in os.getenv(
+            "WORKER_SKIP_INJURY_STATUSES", "out,doubtful,questionable"
+        ).split(",")
+        if status.strip()
+    }
+    injured_names: set[str] = set()
+    if skip_statuses:
+        api_key_for_injuries = keys_to_use[0] if keys_to_use else ""
+        for sport in scan_sports:
+            cache_path = f"injuries_cache_{sport}.json"
+            cached = _load_cached_json(cache_path, 3600)
+            if cached is None:
+                players = fetch_injuries(sport, api_key_for_injuries)
+                _save_cached_json(cache_path, {"players": players})
+            else:
+                players = cached.get("players", [])
+            injured_names.update(
+                injured_player_names(players, skip_statuses)
+            )
+        if injured_names:
+            before = len(quotes)
+            quotes = [
+                quote
+                for quote in quotes
+                if not (
+                    is_player_prop_quote(quote)
+                    and _normalize_player_name(quote.get("player_name"))
+                    in injured_names
+                )
+            ]
+            print(
+                f"Injuries: dropped {before - len(quotes)} prop quotes for "
+                f"{len(injured_names)} injured/questionable players."
+            )
+
     # +EV is Pinnacle-anchored and excludes player props by construction.
-    # The worker applies its own profit cap (<= $20), so the engine's $20 floor is lifted here.
+    # The worker applies its own $20 minimum, so the engine's floor is lifted here.
     scanner_cfg = replace(CONFIG, min_ev_pct=min_ev, min_arb_guaranteed_profit_dollars=0.0)
     scan_res = scan_pinnacle_ev(quotes, config=scanner_cfg, now=now_utc)
     raw_opportunities = [
