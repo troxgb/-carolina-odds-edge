@@ -316,7 +316,16 @@ def _supported_market(market_key: Any) -> bool:
 def _normalize_name(value: Any) -> str:
     if not isinstance(value, str):
         return ""
-    return " ".join(value.split()).casefold()
+    import unicodedata
+
+    text = " ".join(value.split())
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    parts = text.split()
+    suffixes = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"}
+    while parts and parts[-1].casefold().rstrip(".") in {s.rstrip(".") for s in suffixes}:
+        parts.pop()
+    return " ".join(parts).casefold()
 
 
 def _player_scope(player_id: Any, player_name: Any) -> str:

@@ -80,41 +80,41 @@ class EvSelectionTests(unittest.TestCase):
 
 class ArbSelectionTests(unittest.TestCase):
     def test_roi_must_be_between_one_and_five_percent(self):
-        candidates = [arb(0.5, 1.0, event_id="low"), arb(6.0, 9.0, event_id="high"), arb(3.0, 4.0, event_id="ok")]
+        candidates = [arb(0.5, 225.0, event_id="low"), arb(6.0, 225.0, event_id="high"), arb(3.0, 225.0, event_id="ok")]
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
         self.assertEqual([a["event_id"] for a in chosen], ["ok"])
 
-    def test_profit_is_capped_at_twenty_dollars_with_no_minimum(self):
-        candidates = [arb(3.0, 25.0, event_id="too_big"), arb(1.2, 0.5, event_id="tiny")]
+    def test_profit_must_be_at_least_twenty_dollars(self):
+        candidates = [arb(3.0, 225.0, event_id="big_enough"), arb(1.2, 0.5, event_id="too_small")]
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
-        self.assertEqual([a["event_id"] for a in chosen], ["tiny"])
+        self.assertEqual([a["event_id"] for a in chosen], ["big_enough"])
 
     def test_two_arbs_per_day_maximum(self):
-        candidates = [arb(r, 5.0, event_id=f"e{i}") for i, r in enumerate([4.0, 3.5, 2.0])]
+        candidates = [arb(r, 25.0, event_id=f"e{i}") for i, r in enumerate([4.0, 3.5, 2.0])]
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
         self.assertEqual(len(chosen), 2)
 
     def test_ncaab_spread_or_total_arb_limited_to_one_per_day(self):
         candidates = [
-            arb(4.0, 5.0, sport="NCAAB", market="Spread", event_id="n1"),
-            arb(3.0, 5.0, sport="NCAAB", market="Total", event_id="n2"),
+            arb(4.0, 25.0, sport="NCAAB", market="Spread", event_id="n1"),
+            arb(3.0, 25.0, sport="NCAAB", market="Total", event_id="n2"),
         ]
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
         self.assertEqual([a["event_id"] for a in chosen], ["n1"])
 
     def test_ncaab_limit_already_used_blocks_further_ncaab_spread_total_arbs(self):
         history = {worker._daily_key("ncaab_spread_total_arb", PEAK): {"count": 1, "timestamp": 0}}
-        candidates = [arb(4.0, 5.0, sport="NCAAB", market="Spread", event_id="n1")]
+        candidates = [arb(4.0, 25.0, sport="NCAAB", market="Spread", event_id="n1")]
         self.assertEqual(worker.select_arb_alerts(candidates, history, PEAK), [])
 
     def test_ncaab_moneyline_is_not_restricted_by_the_spread_total_limit(self):
-        candidates = [arb(4.0, 5.0, sport="NCAAB", market="Moneyline", event_id="m1")]
+        candidates = [arb(4.0, 25.0, sport="NCAAB", market="Moneyline", event_id="m1")]
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
         self.assertEqual(len(chosen), 1)
 
     def test_daily_counts_increment_for_arbs_and_ncaab_restricted(self):
         history = {}
-        worker.increment_daily_arb_counts(history, arb(4.0, 5.0, sport="NCAAB", market="Spread"), PEAK, 1.0)
+        worker.increment_daily_arb_counts(history, arb(4.0, 25.0, sport="NCAAB", market="Spread"), PEAK, 1.0)
         self.assertEqual(worker.daily_count(history, "arb", PEAK), 1)
         self.assertEqual(worker.daily_count(history, "ncaab_spread_total_arb", PEAK), 1)
 

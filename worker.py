@@ -85,7 +85,7 @@ EV_AMERICAN_MIN = -150  # Only odds from -150 up through +200 for +EV alerts
 EV_AMERICAN_MAX = 200
 ARB_ROI_MIN_PCT = 1.0
 ARB_ROI_MAX_PCT = 5.0
-ARB_MAX_PROFIT_DOLLARS = 20.0  # Maximum profit per arb card; no minimum
+ARB_MIN_PROFIT_DOLLARS = 20.0  # Minimum guaranteed profit per alerted arb card
 PEAK_START_HOUR_ET = 17  # 5:00 PM Eastern
 PEAK_END_HOUR_ET = 20  # 8:00 PM Eastern (exclusive)
 DAILY_EV_ALERT_LIMIT = 1  # +EV alerts per Eastern day, peak window only
@@ -103,6 +103,9 @@ def _env_float(name: str, default: float) -> float:
     except ValueError:
         return default
     return value if math.isfinite(value) else default
+
+
+ALERT_SEND_DELAY_SECONDS = _env_float("WORKER_ALERT_DELAY_SECONDS", 0.25)
 
 
 def _env_optional_float(name: str, default: float | None) -> float | None:
@@ -659,7 +662,7 @@ def format_welcome_guide(greeting_name: str | None = None) -> str:
         f"• $5,000 bankroll ➔ 1u = $50 (0.5u = $25.00, 1.5u = $75.00)\n"
         f"Never risk more than the recommended unit size to protect against normal variance.\n\n"
         f"• <b>What is an Arbitrage Alert (⚡)?</b>\n"
-        f"A 100% risk-free trade where two sportsbooks disagree on odds. You bet both sides and lock in a guaranteed profit before the game even starts. Alerts cover 1% to 5% ROI with up to ${ARB_MAX_PROFIT_DOLLARS:,.2f} in profit.\n\n"
+        f"A 100% risk-free trade where two sportsbooks disagree on odds. You bet both sides and lock in a guaranteed profit before the game even starts. Alerts cover 1% to 5% ROI with at least ${ARB_MIN_PROFIT_DOLLARS:,.2f} in profit.\n\n"
         f"• <b>Fair Odds:</b>\n"
         f"The true 'no-vig' probability. As long as your book offers odds equal to or better than Fair Odds, the bet has positive value.\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1112,7 +1115,7 @@ def select_arb_alerts(
     history: dict[str, dict[str, Any]],
     now_utc: datetime,
 ) -> list[dict[str, Any]]:
-    """Arbs between 1% and 5% ROI with profit up to $20, two per day, NCAAB spread/total capped at one per day."""
+    """Arbs between 1% and 5% ROI with profit of at least $20, two per day, NCAAB spread/total capped at one per day."""
     remaining = DAILY_ARB_ALERT_LIMIT - daily_count(history, "arb", now_utc)
     if remaining <= 0:
         return []
@@ -1122,7 +1125,7 @@ def select_arb_alerts(
         profit = float(arb.get("profit", 0.0))
         if not (ARB_ROI_MIN_PCT <= roi <= ARB_ROI_MAX_PCT):
             continue
-        if profit > ARB_MAX_PROFIT_DOLLARS + 1e-9:
+        if profit < ARB_MIN_PROFIT_DOLLARS - 1e-9:
             continue
         eligible.append(arb)
     best: dict[str, dict[str, Any]] = {}
@@ -1195,6 +1198,25 @@ def run_worker(
         max_ev = configured_max
     if max_ev is not None and max_ev < min_ev:
         max_ev = None
+
+    config_errors = []
+    if not math.isfinite(min_ev) or min_ev < 0:
+        config_errors.append("WORKER_MIN_EV_PCT must be a finite number >= 0.")
+    if max_ev is not None and (not math.isfinite(max_ev) or max_ev < min_ev):
+        config_errors.append("WORKER_MAX_EV_PCT must be >= the minimum EV floor.")
+    if not math.isfinite(min_arb_roi) or min_arb_roi < 0:
+        config_errors.append("min_arb_roi must be >= 0.")
+    if not math.isfinite(max_bet_cap) or max_bet_cap < 1:
+        config_errors.append("MAX_SINGLE_BET must be >= 1.")
+    if config_errors:
+        for error in config_errors:
+            print(f"CONFIG ERROR: {error}", file=sys.stderr)
+        return {
+            "success": False,
+            "error": "; ".join(config_errors),
+            "ev_alerts_sent": 0,
+            "arb_alerts_sent": 0,
+        }
 
     cached_payload = load_cached_odds(cache_file)
     scan_sports = sports or select_scan_sports(ACTIVE_SPORTS, cached_payload)
@@ -1341,7 +1363,7 @@ def run_worker(
     print(
         f"Found {len(valid_arbs)} eligible Arbitrage opportunities "
         f"(ROI >= {min_arb_roi:.1f}%, max bet=${max_bet_cap:.0f}, "
-        f"max profit=${ARB_MAX_PROFIT_DOLLARS:.2f})."
+        f"min profit=${ARB_MIN_PROFIT_DOLLARS:.2f})."
     )
 
     # Cache is written atomically (.tmp + os.replace).
@@ -1380,7 +1402,8 @@ def run_worker(
                 ev_alerts_sent += 1
                 history[alert_key] = {"ev": ev, "timestamp": now_ts}
                 increment_daily_count(history, "ev", now_utc, now_ts)
-                time.sleep(0.15)
+                if ALERT_SEND_DELAY_SECONDS > 0:
+                    time.sleep(ALERT_SEND_DELAY_SECONDS)
             else:
                 print(f"[FALLBACK +EV ALERT] {alert_key}:\n{message}\n")
         else:
@@ -1401,7 +1424,8 @@ def run_worker(
                 arb_alerts_sent += 1
                 history[arb_key] = {"roi": roi, "timestamp": now_ts}
                 increment_daily_arb_counts(history, arb, now_utc, now_ts)
-                time.sleep(0.15)
+                if ALERT_SEND_DELAY_SECONDS > 0:
+                    time.sleep(ALERT_SEND_DELAY_SECONDS)
             else:
                 print(f"[FALLBACK ARB ALERT] {arb_key}:\n{message}\n")
         else:

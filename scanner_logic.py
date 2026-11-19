@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from collections import defaultdict
 from math import ceil, isfinite
 from statistics import NormalDist, median
@@ -557,11 +558,26 @@ def _is_milestone_quote(quote: dict[str, Any]) -> bool:
     return bool(_MILESTONE_SELECTION.match(selection))
 
 
+_PLAYER_NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"}
+
+
+def _normalize_player_name(value: Any) -> str:
+    text = " ".join(str(value or "").split())
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    parts = text.split()
+    while parts and parts[-1].casefold().rstrip(".") in {
+        suffix.rstrip(".") for suffix in _PLAYER_NAME_SUFFIXES
+    }:
+        parts.pop()
+    return " ".join(parts).casefold()
+
+
 def _player_identity(quote: dict[str, Any]) -> str:
     player_id = quote.get("player_id")
     if player_id is not None and str(player_id).strip():
         return f"id:{str(player_id).strip()}"
-    player_name = " ".join(str(quote.get("player_name") or "").split()).casefold()
+    player_name = _normalize_player_name(quote.get("player_name"))
     return f"name:{player_name}" if player_name else ""
 
 
@@ -1613,9 +1629,7 @@ def find_arbitrage_opportunities(
         if not is_player_prop_quote(quote):
             continue
         player_id = quote.get("player_id")
-        player_name = " ".join(
-            str(quote.get("player_name") or "").split()
-        ).casefold()
+        player_name = _normalize_player_name(quote.get("player_name"))
         point = _numeric_point(quote)
         base_market = str(
             quote.get("market_key") or quote.get("market") or ""
@@ -1660,9 +1674,7 @@ def find_arbitrage_opportunities(
         )
         if player_prop:
             base_market = market_key_text.split(":", 1)[0]
-            player_name = " ".join(
-                str(quote.get("player_name") or "").split()
-            ).casefold()
+            player_name = _normalize_player_name(quote.get("player_name"))
             alias_key = (
                 quote.get("sport", ""),
                 quote.get("event_id", ""),
