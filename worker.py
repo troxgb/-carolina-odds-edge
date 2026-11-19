@@ -22,6 +22,7 @@ import sys
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 from uuid import uuid4
 
@@ -76,7 +77,21 @@ MAX_HISTORY_AGE_SECONDS = 48 * 3600  # 48 hours
 # Risk and Bankroll Limits: Never suggest a single bet over $300.
 MAX_SINGLE_BET = 300.0
 DEFAULT_MIN_ARB_ROI = 1.0  # 1.0% minimum ROI for Arbitrage alerts
-ARBITRAGE_TARGET_TOTAL_STAKE = 500.0  # Base stake scaled so no single leg exceeds $300
+ARBITRAGE_TARGET_TOTAL_STAKE = 150.0  # Total stake per arb card (bankroll-sized)
+
+# --- Alert filters (tuned for a $1,000 bankroll and a low-notification goal) ---
+ET_ZONE = ZoneInfo("America/New_York")
+EV_AMERICAN_MIN = -150  # Only odds from -150 up through +200 for +EV alerts
+EV_AMERICAN_MAX = 200
+ARB_ROI_MIN_PCT = 1.0
+ARB_ROI_MAX_PCT = 5.0
+ARB_MAX_PROFIT_DOLLARS = 20.0  # Maximum profit per arb card; no minimum
+PEAK_START_HOUR_ET = 17  # 5:00 PM Eastern
+PEAK_END_HOUR_ET = 20  # 8:00 PM Eastern (exclusive)
+DAILY_EV_ALERT_LIMIT = 1  # +EV alerts per Eastern day, peak window only
+DAILY_ARB_ALERT_LIMIT = 2  # Arb alerts per Eastern day
+DAILY_NCAAB_SPREAD_TOTAL_ARB_LIMIT = 1  # NCAAB spread/total arbs per Eastern day
+CANT_MISS_SPORTS = {"nfl", "nba"}
 
 
 def _env_float(name: str, default: float) -> float:
@@ -644,7 +659,7 @@ def format_welcome_guide(greeting_name: str | None = None) -> str:
         f"• $5,000 bankroll ➔ 1u = $50 (0.5u = $25.00, 1.5u = $75.00)\n"
         f"Never risk more than the recommended unit size to protect against normal variance.\n\n"
         f"• <b>What is an Arbitrage Alert (⚡)?</b>\n"
-        f"A 100% risk-free trade where two sportsbooks disagree on odds. You bet both sides and lock in a guaranteed profit before the game even starts. Alerts require at least ${CONFIG.min_arb_guaranteed_profit_dollars:,.2f} in guaranteed profit.\n\n"
+        f"A 100% risk-free trade where two sportsbooks disagree on odds. You bet both sides and lock in a guaranteed profit before the game even starts. Alerts cover 1% to 5% ROI with up to ${ARB_MAX_PROFIT_DOLLARS:,.2f} in profit.\n\n"
         f"• <b>Fair Odds:</b>\n"
         f"The true 'no-vig' probability. As long as your book offers odds equal to or better than Fair Odds, the bet has positive value.\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -980,6 +995,154 @@ def apply_arbitrage_size_limits(
 # ---------------------------------------------------------------------------
 
 
+def in_ev_odds_range(opportunity: dict[str, Any]) -> bool:
+    """True when the quoted American odds fall between -150 and +200 inclusive."""
+    odds = opportunity.get("odds_american")
+    if odds is None:
+        return False
+    try:
+        value = float(odds)
+    except (TypeError, ValueError):
+        return False
+    return EV_AMERICAN_MIN <= value <= EV_AMERICAN_MAX
+
+
+def in_peak_window(now_utc: datetime) -> bool:
+    """True between 5:00 PM and 8:00 PM Eastern."""
+    hour = now_utc.astimezone(ET_ZONE).hour
+    return PEAK_START_HOUR_ET <= hour < PEAK_END_HOUR_ET
+
+
+def _eastern_date(now_utc: datetime) -> str:
+    return now_utc.astimezone(ET_ZONE).date().isoformat()
+
+
+def _daily_key(kind: str, now_utc: datetime) -> str:
+    return f"__daily__|{kind}|{_eastern_date(now_utc)}"
+
+
+def daily_count(history: dict[str, dict[str, Any]], kind: str, now_utc: datetime) -> int:
+    entry = history.get(_daily_key(kind, now_utc), {})
+    return int(entry.get("count", 0))
+
+
+def increment_daily_count(
+    history: dict[str, dict[str, Any]], kind: str, now_utc: datetime, now_ts: float
+) -> None:
+    key = _daily_key(kind, now_utc)
+    history[key] = {"count": daily_count(history, kind, now_utc) + 1, "timestamp": now_ts}
+
+
+def _is_spread_or_total(market: Any) -> bool:
+    text = str(market or "").casefold()
+    return "spread" in text or "total" in text or "over" in text or "o/u" in text
+
+
+def _is_ncaab(sport: Any) -> bool:
+    return str(sport or "").casefold() == "ncaab"
+
+
+def is_cant_miss(market: Any, sport: Any) -> bool:
+    """Spreads, totals and moneylines for NFL and NBA, plus their main player props."""
+    if str(sport or "").casefold() not in CANT_MISS_SPORTS:
+        return False
+    text = str(market or "").casefold()
+    return any(
+        word in text
+        for word in ("spread", "total", "moneyline", "h2h", "touchdown", "rushing", "receiving", "passing", "points", "rebounds", "assists")
+    )
+
+
+def _bet_group_key(opportunity: dict[str, Any]) -> str:
+    """One key per bet across sportsbooks, so only the best book is alerted."""
+    return "|".join(
+        str(opportunity.get(field) or "")
+        for field in ("event_id", "market", "selection", "line")
+    )
+
+
+def select_ev_alerts(
+    candidates: list[dict[str, Any]],
+    history: dict[str, dict[str, Any]],
+    now_utc: datetime,
+) -> list[dict[str, Any]]:
+    """Best +EV bets only: peak window, one book per bet, daily cap."""
+    if not in_peak_window(now_utc):
+        return []
+    remaining = DAILY_EV_ALERT_LIMIT - daily_count(history, "ev", now_utc)
+    if remaining <= 0:
+        return []
+    best: dict[str, dict[str, Any]] = {}
+    for opportunity in candidates:
+        group = _bet_group_key(opportunity)
+        current = best.get(group)
+        if current is None or float(opportunity.get("ev_pct", 0.0)) > float(current.get("ev_pct", 0.0)):
+            best[group] = opportunity
+    ranked = sorted(best.values(), key=lambda item: float(item.get("ev_pct", 0.0)), reverse=True)
+    chosen = []
+    for opportunity in ranked:
+        if len(chosen) >= remaining:
+            break
+        if should_alert(build_alert_key(opportunity), float(opportunity.get("ev_pct", 0.0)), history):
+            chosen.append(opportunity)
+    return chosen
+
+
+def select_arb_alerts(
+    candidates: list[dict[str, Any]],
+    history: dict[str, dict[str, Any]],
+    now_utc: datetime,
+) -> list[dict[str, Any]]:
+    """Arbs between 1% and 5% ROI with profit up to $20, two per day, NCAAB spread/total capped at one per day."""
+    remaining = DAILY_ARB_ALERT_LIMIT - daily_count(history, "arb", now_utc)
+    if remaining <= 0:
+        return []
+    eligible = []
+    for arb in candidates:
+        roi = float(arb.get("roi_pct", 0.0))
+        profit = float(arb.get("profit", 0.0))
+        if not (ARB_ROI_MIN_PCT <= roi <= ARB_ROI_MAX_PCT):
+            continue
+        if profit > ARB_MAX_PROFIT_DOLLARS + 1e-9:
+            continue
+        eligible.append(arb)
+    best: dict[str, dict[str, Any]] = {}
+    for arb in eligible:
+        group = f"{arb.get('event_id')}|{arb.get('market')}"
+        current = best.get(group)
+        if current is None or float(arb.get("roi_pct", 0.0)) > float(current.get("roi_pct", 0.0)):
+            best[group] = arb
+    ranked = sorted(
+        best.values(),
+        key=lambda arb: (
+            is_cant_miss(arb.get("market"), arb.get("sport")),
+            float(arb.get("roi_pct", 0.0)),
+        ),
+        reverse=True,
+    )
+    ncaab_used = daily_count(history, "ncaab_spread_total_arb", now_utc)
+    chosen = []
+    for arb in ranked:
+        if len(chosen) >= remaining:
+            break
+        restricted = _is_ncaab(arb.get("sport")) and _is_spread_or_total(arb.get("market"))
+        if restricted and ncaab_used >= DAILY_NCAAB_SPREAD_TOTAL_ARB_LIMIT:
+            continue
+        if should_alert_arbitrage(build_arbitrage_alert_key(arb), float(arb.get("roi_pct", 0.0)), history):
+            chosen.append(arb)
+            if restricted:
+                ncaab_used += 1
+    return chosen
+
+
+def increment_daily_arb_counts(
+    history: dict[str, dict[str, Any]], arb: dict[str, Any], now_utc: datetime, now_ts: float
+) -> None:
+    increment_daily_count(history, "arb", now_utc, now_ts)
+    if _is_ncaab(arb.get("sport")) and _is_spread_or_total(arb.get("market")):
+        increment_daily_count(history, "ncaab_spread_total_arb", now_utc, now_ts)
+
+
 def run_worker(
     sports: list[str] | None = None,
     min_ev: float | None = None,
@@ -1091,7 +1254,8 @@ def run_worker(
     print(f"Fetched {len(quotes)} quotes across {len(scan_sports)} sports.")
 
     # +EV is Pinnacle-anchored and excludes player props by construction.
-    scanner_cfg = replace(CONFIG, min_ev_pct=min_ev)
+    # The worker applies its own profit cap (<= $20), so the engine's $20 floor is lifted here.
+    scanner_cfg = replace(CONFIG, min_ev_pct=min_ev, min_arb_guaranteed_profit_dollars=0.0)
     scan_res = scan_pinnacle_ev(quotes, config=scanner_cfg, now=now_utc)
     raw_opportunities = [
         opportunity
@@ -1105,6 +1269,8 @@ def run_worker(
         if ev < min_ev:
             continue
         if max_ev is not None and ev > max_ev:
+            continue
+        if not in_ev_odds_range(opportunity):
             continue
         commence_time = opportunity.get("kickoff") or opportunity.get("commence_time")
         if is_game_started(commence_time, now_utc):
@@ -1147,20 +1313,16 @@ def run_worker(
         roi = float(arb.get("roi_pct", 0.0))
         if roi < min_arb_roi:
             continue
-        profit = float(arb.get("profit", 0.0))
-        if (
-            profit >= CONFIG.min_arb_guaranteed_profit_dollars - 1e-9
-            and all(
-                float(leg.get("stake", 0.0)) <= max_bet_cap
-                for leg in arb.get("legs", [])
-            )
-        ):
-            valid_arbs.append(arb)
+        if roi > ARB_ROI_MAX_PCT:
+            continue
+        if not all(float(leg.get("stake", 0.0)) <= max_bet_cap for leg in arb.get("legs", [])):
+            continue
+        valid_arbs.append(arb)
 
     print(
         f"Found {len(valid_arbs)} eligible Arbitrage opportunities "
         f"(ROI >= {min_arb_roi:.1f}%, max bet=${max_bet_cap:.0f}, "
-        f"min profit=${CONFIG.min_arb_guaranteed_profit_dollars:.2f})."
+        f"max profit=${ARB_MAX_PROFIT_DOLLARS:.2f})."
     )
 
     # Cache is written atomically (.tmp + os.replace).
@@ -1188,11 +1350,9 @@ def run_worker(
         print(f"Pruned {pruned} alert history entries older than 48 hours.")
 
     ev_alerts_sent = 0
-    for opportunity in valid_opportunities:
+    for opportunity in select_ev_alerts(valid_opportunities, history, now_utc):
         alert_key = build_alert_key(opportunity)
         ev = float(opportunity.get("ev_pct", 0.0))
-        if not should_alert(alert_key, ev, history):
-            continue
 
         message = format_telegram_alert(opportunity)
         if alerts_configured and not dry_run:
@@ -1200,6 +1360,7 @@ def run_worker(
             if dispatch_alert(message):
                 ev_alerts_sent += 1
                 history[alert_key] = {"ev": ev, "timestamp": now_ts}
+                increment_daily_count(history, "ev", now_utc, now_ts)
                 time.sleep(0.15)
             else:
                 print(f"[FALLBACK +EV ALERT] {alert_key}:\n{message}\n")
@@ -1207,13 +1368,12 @@ def run_worker(
             print(f"[CONSOLE +EV ALERT] {alert_key} (+{ev:.2f}% EV):\n{message}\n")
             ev_alerts_sent += 1
             history[alert_key] = {"ev": ev, "timestamp": now_ts}
+            increment_daily_count(history, "ev", now_utc, now_ts)
 
     arb_alerts_sent = 0
-    for arb in valid_arbs:
+    for arb in select_arb_alerts(valid_arbs, history, now_utc):
         arb_key = build_arbitrage_alert_key(arb)
         roi = float(arb.get("roi_pct", 0.0))
-        if not should_alert_arbitrage(arb_key, roi, history):
-            continue
 
         message = format_telegram_arbitrage_alert(arb)
         if alerts_configured and not dry_run:
@@ -1221,6 +1381,7 @@ def run_worker(
             if dispatch_alert(message):
                 arb_alerts_sent += 1
                 history[arb_key] = {"roi": roi, "timestamp": now_ts}
+                increment_daily_arb_counts(history, arb, now_utc, now_ts)
                 time.sleep(0.15)
             else:
                 print(f"[FALLBACK ARB ALERT] {arb_key}:\n{message}\n")
@@ -1228,6 +1389,7 @@ def run_worker(
             print(f"[CONSOLE ARB ALERT] {arb_key} (+{roi:.2f}% ROI):\n{message}\n")
             arb_alerts_sent += 1
             history[arb_key] = {"roi": roi, "timestamp": now_ts}
+            increment_daily_arb_counts(history, arb, now_utc, now_ts)
 
     save_alert_history(history, history_file)
     print(

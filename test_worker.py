@@ -399,7 +399,8 @@ class WorkerTests(unittest.TestCase):
                         "TELEGRAM_CHAT_ID": "chat_id",
                     },
                 ):
-                    result = run_worker(
+                    with patch("worker.in_peak_window", return_value=True):
+                      result = run_worker(
                         sports=["NBA"],
                         min_ev=3.0,
                         min_arb_roi=1.0,
@@ -409,10 +410,11 @@ class WorkerTests(unittest.TestCase):
 
             self.assertTrue(result["success"])
             self.assertEqual(result["eligible_opportunities"], 1)
-            self.assertEqual(result["eligible_arbitrages"], 1)  # Low ROI filtered out
+            # Fixture arb is 7.4% ROI / $36.80 profit: above the 5% ROI and $20 profit caps.
+            self.assertEqual(result["eligible_arbitrages"], 0)
             self.assertEqual(result["ev_alerts_sent"], 1)
-            self.assertEqual(result["arb_alerts_sent"], 1)
-            self.assertEqual(mock_send.call_count, 2)
+            self.assertEqual(result["arb_alerts_sent"], 0)
+            self.assertEqual(mock_send.call_count, 1)
 
     def test_get_api_keys_ordering_and_fallback(self):
         with patch.dict(
