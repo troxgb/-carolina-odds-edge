@@ -11,6 +11,10 @@ class ScannerConfig:
     min_liquidity_dollars: float = 25.0
     verify_ev_pct: float = 15.0
     max_quote_age_seconds: int = 60
+    # Free-tier PropLine enrichments (opt-in; increase payload size).
+    include_depth: bool = False
+    include_book_ids: bool = False
+    include_links: bool = False
     max_pinnacle_overround: float = 1.06
     bankroll: float = 1000.0
     kelly_fraction: float = 0.25

@@ -712,6 +712,10 @@ def parse_odds_payload(
                         "liquidity_updated_at": outcome.get(
                             "liquidity_updated_at"
                         ),
+                        "depth": outcome.get("depth"),
+                        "book_outcome_id": outcome.get("book_outcome_id"),
+                        "book_event_id": bookmaker.get("book_event_id"),
+                        "link": bookmaker.get("link"),
                         "payout_multiplier": outcome.get("payout_multiplier"),
                         "last_update": market.get("last_update"),
                         "last_change_at": outcome.get("last_change_at"),
@@ -762,14 +766,21 @@ def _fetch_sport(
     session = _new_api_session()
     timeout_retries = 0
     try:
+        params: dict[str, Any] = {
+            "markets": sport_markets(sport_label),
+            "bookmakers": ",".join(
+                [*APPROVED_BOOKMAKERS, CONFIG.pinnacle_bookmaker_key]
+            ),
+            "max_age": CONFIG.max_quote_age_seconds,
+        }
+        if CONFIG.include_depth:
+            params["includeDepth"] = "true"
+        if CONFIG.include_book_ids:
+            params["includeBookIds"] = "true"
+        if CONFIG.include_links:
+            params["includeLinks"] = "true"
         request_args = {
-            "params": {
-                "markets": sport_markets(sport_label),
-                "bookmakers": ",".join(
-                    [*APPROVED_BOOKMAKERS, CONFIG.pinnacle_bookmaker_key]
-                ),
-                "max_age": CONFIG.max_quote_age_seconds,
-            },
+            "params": params,
             "headers": {"X-API-Key": api_key.strip()},
             "timeout": CONFIG.api_timeout_seconds,
         }

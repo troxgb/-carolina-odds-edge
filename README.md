@@ -127,6 +127,11 @@ $20.00 in profit.
 
 ## Calculations and scan quality
 
+- Free-tier PropLine enrichments (opt-in via `CONFIG.include_depth`,
+  `include_book_ids`, `include_links`) can attach order-book depth, native book
+  ids, and bet links without extra quota. Depth is available for ProphetX among
+  our approved books and feeds the arbitrage evaluator's execution-mode
+  classification.
 - Totals are grouped by line, period, and team. A game total is never compared
   with either team's total; team-total rows show the team in the market label.
 - Duplicate market generations use the newest `last_update`. Outcomes whose
