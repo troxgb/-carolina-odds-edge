@@ -692,13 +692,32 @@ def send_telegram_message(
     }
     session = _new_telegram_session()
     try:
-        response = session.post(url, json=payload, timeout=timeout)
-        if response.status_code == 200:
-            return True
-        print(
-            f"Telegram API error (HTTP {response.status_code}): {response.text}",
-            file=sys.stderr,
-        )
+        for attempt in range(3):
+            response = session.post(url, json=payload, timeout=timeout)
+            if response.status_code == 200:
+                return True
+            if response.status_code == 429 and attempt < 2:
+                retry_after = 3
+                try:
+                    retry_after = int(
+                        (response.json().get("parameters") or {}).get(
+                            "retry_after", retry_after
+                        )
+                    )
+                except (ValueError, TypeError, AttributeError):
+                    pass
+                retry_after = max(1, min(retry_after, 30))
+                print(
+                    f"Telegram rate limited (HTTP 429); retrying in {retry_after}s.",
+                    file=sys.stderr,
+                )
+                time.sleep(retry_after)
+                continue
+            print(
+                f"Telegram API error (HTTP {response.status_code}): {response.text}",
+                file=sys.stderr,
+            )
+            return False
         return False
     except requests.RequestException as error:
         print(f"Telegram request failed: {error}", file=sys.stderr)

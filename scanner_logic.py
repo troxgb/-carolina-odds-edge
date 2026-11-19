@@ -1260,6 +1260,9 @@ def evaluate_arbitrage_opportunity(candidate: dict[str, Any]) -> dict[str, Any]:
     top_level_odds = max(
         (float(level.get("decimal_odds", 0.0)) for level in levels), default=0.0
     )
+    top_level_net_odds = (
+        1.0 + (top_level_odds - 1.0) * (1.0 - fee_pct) if top_level_odds > 1 else top_level_odds
+    )
     top_level_depth = sum(
         float(level.get("available_stake", 0.0))
         for level in levels
@@ -1317,9 +1320,9 @@ def evaluate_arbitrage_opportunity(candidate: dict[str, Any]) -> dict[str, Any]:
         "exchange_depth_at_break_even": depth_at_be,
         "max_stake_per_bet": max_stake_per_bet,
         "bankroll_cap": bankroll_cap,
-        "sportsbook_max_allowed_stake_(as_exchange_equiv)": sportsbook_max * odds1 / 2.0
-        if odds1 > 1
-        else sportsbook_max,
+        "sportsbook_max_allowed_stake": (
+            sportsbook_max * odds1 / top_level_odds if top_level_odds > 1 else sportsbook_max
+        ),
     }
     binding_name = min(constraint_values, key=lambda name: constraint_values[name])
     binding_value = constraint_values[binding_name]
@@ -1335,7 +1338,7 @@ def evaluate_arbitrage_opportunity(candidate: dict[str, Any]) -> dict[str, Any]:
     target_s1 = target_s2 * target_net_odds / odds1 if target_s2 > 0 else 0.0
     partial_fill_qty = min(top_level_depth, target_s2)
     partial_outlay = target_s1 + partial_fill_qty
-    partial_payout = min(target_s1 * odds1, partial_fill_qty * top_level_odds)
+    partial_payout = min(target_s1 * odds1, partial_fill_qty * top_level_net_odds)
     worst_case_loss = partial_outlay - partial_payout
 
     result["binding_bottleneck"] = (
