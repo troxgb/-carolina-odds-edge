@@ -21,7 +21,7 @@ upcoming scans show events whose kickoff is still in the future in US Eastern
 time, while live scans show events marked live and not completed by the API.
 Event times are displayed in US Eastern time (`America/New_York`). Requests
 include the configured North Carolina venues (DraftKings, FanDuel, BetMGM,
-Fanatics, theScore Bet, Underdog, Novig, and ProphetX) and Pinnacle. Pinnacle
+Fanatics, theScore Bet, Novig, and ProphetX) and Pinnacle. Pinnacle
 is collected only as a sharp reference and never shown as a bettable venue.
 No automatic retry is
 made when a rate or daily quota limit is reached.

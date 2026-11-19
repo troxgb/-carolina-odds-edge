@@ -108,7 +108,6 @@ APPROVED_BOOKMAKERS = {
     "betmgm": "BetMGM",
     "fanatics": "Fanatics",
     "thescorebet": "theScore Bet",
-    "underdog": "Underdog",
     "novig": "Novig",
     "prophetx": "ProphetX",
 }

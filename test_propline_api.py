@@ -29,7 +29,6 @@ class PropLineApiTests(unittest.TestCase):
                 "betmgm": "BetMGM",
                 "fanatics": "Fanatics",
                 "thescorebet": "theScore Bet",
-                "underdog": "Underdog",
                 "novig": "Novig",
                 "prophetx": "ProphetX",
             },
@@ -81,39 +80,6 @@ class PropLineApiTests(unittest.TestCase):
         self.assertEqual(
             quotes[0]["liquidity_updated_at"], "2026-11-13T10:00:00Z"
         )
-
-    def test_underdog_price_is_not_adjusted_again_by_payout_multiplier(self):
-        events = [
-            {
-                "id": "event-underdog",
-                "home_team": "Home",
-                "away_team": "Away",
-                "bookmakers": [
-                    {
-                        "key": "underdog",
-                        "markets": [
-                            {
-                                "key": "h2h",
-                                "outcomes": [
-                                    {
-                                        "name": "Home",
-                                        "side": "home",
-                                        "price": 150,
-                                        "payout_multiplier": 2.5,
-                                    }
-                                ],
-                            }
-                        ],
-                    }
-                ],
-            }
-        ]
-
-        quote = parse_odds_payload(events, "NFL")[0]
-
-        self.assertEqual(quote["odds_american"], 150)
-        self.assertEqual(quote["odds_decimal"], 2.5)
-        self.assertEqual(quote["payout_multiplier"], 2.5)
 
     def test_schedule_filter_uses_current_eastern_time(self):
         now = datetime(2026, 11, 13, 16, 18, tzinfo=EASTERN)
@@ -460,19 +426,6 @@ class PropLineApiTests(unittest.TestCase):
                         ],
                     },
                     {
-                        "key": "underdog",
-                        "title": "Underdog",
-                        "markets": [
-                            {
-                                "key": "h2h",
-                                "outcomes": [
-                                    {"name": "Home", "price": 120},
-                                    {"name": "Away", "price": -130},
-                                ],
-                            }
-                        ],
-                    },
-                    {
                         "key": "novig",
                         "title": "Novig",
                         "markets": [
@@ -546,7 +499,6 @@ class PropLineApiTests(unittest.TestCase):
                 "BetMGM",
                 "Fanatics",
                 "theScore Bet",
-                "Underdog",
                 "Novig",
                 "ProphetX",
             },
