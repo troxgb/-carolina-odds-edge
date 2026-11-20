@@ -1391,8 +1391,9 @@ def run_worker(
             "are not configured. Alerts will be logged to the console only."
         )
 
-    if telegram_configured and not dry_run:
-        check_and_welcome_new_members(bot_token, chat_id)
+    # New-member onboarding is handled by a pinned guide message (see --send-guide),
+    # not by per-scan welcome alerts. This avoids wasteful getUpdates calls and
+    # alert spam on every cron run.
 
     if not keys_to_use:
         print(
@@ -1696,6 +1697,25 @@ def main() -> None:
             print("Successfully sent onboarding guide to Telegram group.")
         else:
             print("Failed to send onboarding guide to Telegram group.", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    # --announce "message" sends a one-off announcement to the Telegram group.
+    announce_idx = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--announce":
+            announce_idx = i
+            break
+    if announce_idx is not None and announce_idx + 1 < len(sys.argv):
+        bot_token, chat_id = get_telegram_credentials()
+        if not bot_token or not chat_id:
+            print("ERROR: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set.", file=sys.stderr)
+            sys.exit(1)
+        message = sys.argv[announce_idx + 1]
+        if send_telegram_message(bot_token, chat_id, message):
+            print("Announcement sent.")
+        else:
+            print("Failed to send announcement.", file=sys.stderr)
             sys.exit(1)
         return
 
