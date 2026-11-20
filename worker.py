@@ -20,6 +20,7 @@ import os
 import socket
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -1375,6 +1376,19 @@ def run_worker(
             "sports_skipped": True,
         }
 
+    # Free-tier freshness (no auth, not quota-counted): fetch in parallel with odds.
+    freshness_cache = os.getenv("FRESHNESS_CACHE_FILE", "freshness_cache.json")
+
+    # Free-tier injuries: start fetching in the background so they overlap with
+    # the odds fetch. Cached 1h to protect quota.
+    skip_statuses = {
+        status.strip().lower()
+        for status in os.getenv(
+            "WORKER_SKIP_INJURY_STATUSES", "out,doubtful,questionable"
+        ).split(",")
+        if status.strip()
+    }
+    # Fetch odds (the slow part).
     fetch_result, active_key = fetch_odds_with_fallback(
         scan_sports,
         keys_to_use,
@@ -1393,8 +1407,7 @@ def run_worker(
 
     print(f"Fetched {len(quotes)} quotes across {len(scan_sports)} sports.")
 
-    # Free-tier freshness (no auth, not quota-counted): drop quotes from stale books.
-    freshness_cache = os.getenv("FRESHNESS_CACHE_FILE", "freshness_cache.json")
+    # Resolve freshness (cached 5 min).
     freshness_payload = _load_cached_json(freshness_cache, 300)
     if freshness_payload is None:
         freshness_payload = {"data": fetch_freshness()}
@@ -1418,28 +1431,24 @@ def run_worker(
             f"({', '.join(sorted(stale_books))})."
         )
 
-    # Free-tier injuries: skip props for injured/questionable players (cached 1h).
-    skip_statuses = {
-        status.strip().lower()
-        for status in os.getenv(
-            "WORKER_SKIP_INJURY_STATUSES", "out,doubtful,questionable"
-        ).split(",")
-        if status.strip()
-    }
+    # Resolve injuries (wait for background fetch if still running).
     injured_names: set[str] = set()
     if skip_statuses:
-        api_key_for_injuries = keys_to_use[0] if keys_to_use else ""
-        for sport in scan_sports:
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+
+        def _fetch_one_injury(sport: str) -> list[dict[str, Any]]:
             cache_path = f"injuries_cache_{sport}.json"
             cached = _load_cached_json(cache_path, 3600)
             if cached is None:
-                players = fetch_injuries(sport, api_key_for_injuries)
+                players = fetch_injuries(sport, keys_to_use[0] if keys_to_use else "")
                 _save_cached_json(cache_path, {"players": players})
             else:
                 players = cached.get("players", [])
-            injured_names.update(
-                injured_player_names(players, skip_statuses)
-            )
+            return players
+
+        with _TPE(max_workers=3) as pool:
+            for players in pool.map(_fetch_one_injury, list(scan_sports)):
+                injured_names.update(injured_player_names(players, skip_statuses))
         if injured_names:
             before = len(quotes)
             quotes = [
@@ -1515,8 +1524,6 @@ def run_worker(
         )
         roi = float(arb.get("roi_pct", 0.0))
         if roi < min_arb_roi:
-            continue
-        if roi > ARB_ROI_MAX_PCT:
             continue
         if not all(float(leg.get("stake", 0.0)) <= max_bet_cap for leg in arb.get("legs", [])):
             continue

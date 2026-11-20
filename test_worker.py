@@ -410,11 +410,11 @@ class WorkerTests(unittest.TestCase):
 
             self.assertTrue(result["success"])
             self.assertEqual(result["eligible_opportunities"], 1)
-            # Fixture arb is 7.4% ROI / $36.80 profit: above the 5% ROI and $20 profit caps.
-            self.assertEqual(result["eligible_arbitrages"], 0)
+            # Fixture arb is 7.4% ROI / $37.20 profit: clears the 1% ROI floor and $20 profit minimum.
+            self.assertEqual(result["eligible_arbitrages"], 1)
             self.assertEqual(result["ev_alerts_sent"], 1)
-            self.assertEqual(result["arb_alerts_sent"], 0)
-            self.assertEqual(mock_send.call_count, 1)
+            self.assertEqual(result["arb_alerts_sent"], 1)
+            self.assertEqual(mock_send.call_count, 2)
 
     def test_get_api_keys_ordering_and_fallback(self):
         with patch.dict(
