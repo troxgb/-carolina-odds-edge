@@ -44,7 +44,7 @@ class ScannerConfig:
         (3, 0.04),
         (7, 0.025),
     )
-    api_timeout_seconds: int = 30
+    api_timeout_seconds: int = 15
     api_timeout_retries: int = 1
     tls_retries: int = 4
     api_max_workers: int = 6
