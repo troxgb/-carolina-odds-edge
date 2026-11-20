@@ -118,8 +118,14 @@ EV_AMERICAN_MAX = 200
 ARB_ROI_MIN_PCT = 1.0
 ARB_ROI_MAX_PCT = 5.0
 ARB_MIN_PROFIT_DOLLARS = 20.0  # Minimum guaranteed profit per alerted arb card
-PEAK_START_HOUR_ET = 17  # 5:00 PM Eastern
-PEAK_END_HOUR_ET = 20  # 8:00 PM Eastern (exclusive)
+PEAK_START_HOUR_ET = 15  # 3:00 PM Eastern (weekdays)
+PEAK_END_HOUR_ET = 20  # 8:00 PM Eastern (exclusive, weekdays)
+WEEKEND_PEAK_START_HOUR_ET = 9  # 9:00 AM Eastern (weekends)
+WEEKEND_PEAK_END_HOUR_ET = 23  # 11:00 PM Eastern (weekends, exclusive)
+
+# Per-scan alert caps: send at most this many alerts per run, picking the best.
+MAX_EV_ALERTS_PER_SCAN = 3
+MAX_ARB_ALERTS_PER_SCAN = 5
 # Daily alert caps removed: alert every qualifying opportunity (subject to
 # dedup history and peak window for +EV).
 DAILY_EV_ALERT_LIMIT = 10**9
@@ -1086,8 +1092,11 @@ def in_ev_odds_range(opportunity: dict[str, Any]) -> bool:
 
 
 def in_peak_window(now_utc: datetime) -> bool:
-    """True between 5:00 PM and 8:00 PM Eastern."""
-    hour = now_utc.astimezone(ET_ZONE).hour
+    """True during the alert window: 3-8 PM ET on weekdays, 9 AM-11 PM on weekends."""
+    local = now_utc.astimezone(ET_ZONE)
+    hour = local.hour
+    if local.weekday() >= 5:  # Saturday or Sunday
+        return WEEKEND_PEAK_START_HOUR_ET <= hour < WEEKEND_PEAK_END_HOUR_ET
     return PEAK_START_HOUR_ET <= hour < PEAK_END_HOUR_ET
 
 
@@ -1544,7 +1553,9 @@ def run_worker(
         print(f"Pruned {pruned} alert history entries older than 48 hours.")
 
     ev_alerts_sent = 0
-    for opportunity in select_ev_alerts(valid_opportunities, history, now_utc):
+    for opportunity in select_ev_alerts(valid_opportunities, history, now_utc)[
+        :MAX_EV_ALERTS_PER_SCAN
+    ]:
         alert_key = build_alert_key(opportunity)
         ev = float(opportunity.get("ev_pct", 0.0))
 
@@ -1566,7 +1577,9 @@ def run_worker(
             increment_daily_count(history, "ev", now_utc, now_ts)
 
     arb_alerts_sent = 0
-    for arb in select_arb_alerts(valid_arbs, history, now_utc):
+    for arb in select_arb_alerts(valid_arbs, history, now_utc)[
+        :MAX_ARB_ALERTS_PER_SCAN
+    ]:
         arb_key = build_arbitrage_alert_key(arb)
         roi = float(arb.get("roi_pct", 0.0))
 

@@ -93,7 +93,13 @@ class ScannerConfig:
         ),
         (
             "football_nfl",
-            ("player_pass_yds", "player_rush_yds", "player_reception_yds"),
+            (
+                "player_pass_yds",
+                "player_rush_yds",
+                "player_reception_yds",
+                "player_pass_tds",
+                "player_receptions",
+            ),
         ),
         (
             "football_ncaaf",

@@ -803,7 +803,7 @@ class PropLineApiTests(unittest.TestCase):
         self.assertEqual(
             sport_markets("NFL"),
             "h2h,spreads,totals,player_pass_yds,player_rush_yds,"
-            "player_reception_yds",
+            "player_reception_yds,player_pass_tds,player_receptions",
         )
         self.assertEqual(
             sport_markets("NCAAF"),

@@ -51,11 +51,18 @@ class OddsRangeTests(unittest.TestCase):
 
 
 class PeakWindowTests(unittest.TestCase):
-    def test_peak_window_is_five_to_eight_eastern(self):
+    def test_peak_window_is_three_to_eight_eastern_on_weekdays(self):
+        self.assertTrue(worker.in_peak_window(utc(2026, 11, 19, 20, 0)))   # 3:00 PM ET
         self.assertTrue(worker.in_peak_window(utc(2026, 11, 19, 22, 0)))   # 5:00 PM ET
         self.assertTrue(worker.in_peak_window(utc(2026, 11, 20, 0, 59)))   # 7:59 PM ET
         self.assertFalse(worker.in_peak_window(utc(2026, 11, 20, 1, 0)))   # 8:00 PM ET
-        self.assertFalse(worker.in_peak_window(utc(2026, 11, 19, 21, 59))) # 4:59 PM ET
+        self.assertFalse(worker.in_peak_window(utc(2026, 11, 19, 19, 59))) # 2:59 PM ET
+
+    def test_peak_window_is_all_day_on_weekends(self):
+        # Saturday Nov 21, 2026
+        self.assertTrue(worker.in_peak_window(utc(2026, 11, 21, 14, 0)))   # 9:00 AM ET
+        self.assertTrue(worker.in_peak_window(utc(2026, 11, 21, 22, 0)))   # 5:00 PM ET
+        self.assertFalse(worker.in_peak_window(utc(2026, 11, 21, 13, 0)))  # 8:00 AM ET (before 9)
 
 
 class EvSelectionTests(unittest.TestCase):
