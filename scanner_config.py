@@ -47,7 +47,7 @@ class ScannerConfig:
     api_timeout_seconds: int = 15
     api_timeout_retries: int = 1
     tls_retries: int = 4
-    api_max_workers: int = 6
+    api_max_workers: int = 1
     arbitrage_rounding_step: int = 10
     max_close_lag_seconds: int = 900
     verify_stake_multiplier: float = 0.0
