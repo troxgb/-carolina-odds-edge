@@ -1758,6 +1758,9 @@ def main() -> None:
     result = run_worker(dry_run=dry_run)
     if not result.get("success", False):
         sys.exit(1)
+    # Force immediate exit to avoid D-state hangs during Python cleanup
+    # (HTTP connection pool teardown, GC on 130MB+ cached odds, etc.).
+    os._exit(0)
     if not result.get("success", False):
         sys.exit(1)
 
