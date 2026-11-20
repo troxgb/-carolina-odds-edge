@@ -94,29 +94,23 @@ class ArbSelectionTests(unittest.TestCase):
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
         self.assertEqual(len(chosen), 3)
 
-    def test_ncaab_spread_or_total_arb_limited_to_one_per_day(self):
+    def test_ncaab_spread_and_total_arbs_are_not_capped(self):
         candidates = [
             arb(4.0, 25.0, sport="NCAAB", market="Spread", event_id="n1"),
             arb(3.0, 25.0, sport="NCAAB", market="Total", event_id="n2"),
         ]
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
-        self.assertEqual([a["event_id"] for a in chosen], ["n1"])
+        self.assertEqual([a["event_id"] for a in chosen], ["n1", "n2"])
 
-    def test_ncaab_limit_already_used_blocks_further_ncaab_spread_total_arbs(self):
-        history = {worker._daily_key("ncaab_spread_total_arb", PEAK): {"count": 1, "timestamp": 0}}
-        candidates = [arb(4.0, 25.0, sport="NCAAB", market="Spread", event_id="n1")]
-        self.assertEqual(worker.select_arb_alerts(candidates, history, PEAK), [])
-
-    def test_ncaab_moneyline_is_not_restricted_by_the_spread_total_limit(self):
+    def test_ncaab_moneyline_is_not_restricted(self):
         candidates = [arb(4.0, 25.0, sport="NCAAB", market="Moneyline", event_id="m1")]
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
         self.assertEqual(len(chosen), 1)
 
-    def test_daily_counts_increment_for_arbs_and_ncaab_restricted(self):
+    def test_daily_counts_increment_for_arbs(self):
         history = {}
         worker.increment_daily_arb_counts(history, arb(4.0, 25.0, sport="NCAAB", market="Spread"), PEAK, 1.0)
         self.assertEqual(worker.daily_count(history, "arb", PEAK), 1)
-        self.assertEqual(worker.daily_count(history, "ncaab_spread_total_arb", PEAK), 1)
 
 
 class CantMissTests(unittest.TestCase):

@@ -124,7 +124,7 @@ PEAK_END_HOUR_ET = 20  # 8:00 PM Eastern (exclusive)
 # dedup history and peak window for +EV).
 DAILY_EV_ALERT_LIMIT = 10**9
 DAILY_ARB_ALERT_LIMIT = 10**9
-DAILY_NCAAB_SPREAD_TOTAL_ARB_LIMIT = 1  # NCAAB spread/total arbs per Eastern day
+
 CANT_MISS_SPORTS = {"nfl", "nba"}
 
 
@@ -1171,7 +1171,7 @@ def select_arb_alerts(
     history: dict[str, dict[str, Any]],
     now_utc: datetime,
 ) -> list[dict[str, Any]]:
-    """Arbs between 1% and 5% ROI with profit of at least $20, two per day, NCAAB spread/total capped at one per day."""
+    """Arbs with ROI of at least 1% and profit of at least $20, no daily cap."""
     remaining = DAILY_ARB_ALERT_LIMIT - daily_count(history, "arb", now_utc)
     if remaining <= 0:
         return []
@@ -1198,18 +1198,12 @@ def select_arb_alerts(
         ),
         reverse=True,
     )
-    ncaab_used = daily_count(history, "ncaab_spread_total_arb", now_utc)
     chosen = []
     for arb in ranked:
         if len(chosen) >= remaining:
             break
-        restricted = _is_ncaab(arb.get("sport")) and _is_spread_or_total(arb.get("market"))
-        if restricted and ncaab_used >= DAILY_NCAAB_SPREAD_TOTAL_ARB_LIMIT:
-            continue
         if should_alert_arbitrage(build_arbitrage_alert_key(arb), float(arb.get("roi_pct", 0.0)), history):
             chosen.append(arb)
-            if restricted:
-                ncaab_used += 1
     return chosen
 
 
@@ -1217,8 +1211,6 @@ def increment_daily_arb_counts(
     history: dict[str, dict[str, Any]], arb: dict[str, Any], now_utc: datetime, now_ts: float
 ) -> None:
     increment_daily_count(history, "arb", now_utc, now_ts)
-    if _is_ncaab(arb.get("sport")) and _is_spread_or_total(arb.get("market")):
-        increment_daily_count(history, "ncaab_spread_total_arb", now_utc, now_ts)
 
 
 def run_worker(
