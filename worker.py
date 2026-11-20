@@ -117,7 +117,6 @@ ET_ZONE = ZoneInfo("America/New_York")
 EV_AMERICAN_MIN = -150  # Only odds from -150 up through +200 for +EV alerts
 EV_AMERICAN_MAX = 200
 ARB_ROI_MIN_PCT = 1.0
-ARB_ROI_MAX_PCT = 5.0
 ARB_MIN_PROFIT_DOLLARS = 20.0  # Minimum guaranteed profit per alerted arb card
 PEAK_START_HOUR_ET = 15  # 3:00 PM Eastern (weekdays)
 PEAK_END_HOUR_ET = 20  # 8:00 PM Eastern (exclusive, weekdays)
