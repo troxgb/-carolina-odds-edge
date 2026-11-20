@@ -4,8 +4,11 @@ import math
 import os
 import socket
 import threading
+
+# Bound all socket operations (including DNS resolution) globally.
+socket.setdefaulttimeout(10)
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -762,6 +765,8 @@ def _fetch_sport(
     api_key: str,
     quota_state_file: str | None = None,
 ) -> dict[str, Any]:
+    # Bound DNS resolution and TLS handshake, which requests' timeout does not cover.
+    socket.setdefaulttimeout(CONFIG.api_timeout_seconds)
     result: dict[str, Any] = {"quotes": [], "errors": [], "warnings": [], "quota": {}}
     sport_key = SPORT_CONFIG[sport_label]
     session = _new_api_session()
@@ -941,15 +946,38 @@ def _run_api_with_key(
     quota_state_file: str | None,
 ) -> dict[str, Any]:
     max_workers = max(1, min(CONFIG.api_max_workers, len(sports)))
+    results = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        results = list(
-            executor.map(
-                lambda sport: _fetch_sport(
-                    sport, mode, api_key, quota_state_file
-                ),
-                sports,
-            )
-        )
+        futures = {
+            executor.submit(_fetch_sport, sport, mode, api_key, quota_state_file): sport
+            for sport in sports
+        }
+        try:
+            for future in as_completed(futures, timeout=CONFIG.api_timeout_seconds * len(sports) + 30):
+                try:
+                    results.append(future.result())
+                except Exception as error:
+                    sport = futures[future]
+                    results.append(
+                        {
+                            "quotes": [],
+                            "errors": [f"{sport}: {error}"],
+                            "warnings": [],
+                            "quota": {},
+                        }
+                    )
+        except (TimeoutError, FuturesTimeoutError):
+            for future, sport in futures.items():
+                if not future.done():
+                    future.cancel()
+                    results.append(
+                        {
+                            "quotes": [],
+                            "errors": [f"{sport}: timed out after {CONFIG.api_timeout_seconds}s"],
+                            "warnings": [],
+                            "quota": {},
+                        }
+                    )
 
     quotes = [quote for result in results for quote in result["quotes"]]
     errors = [error for result in results for error in result["errors"]]
@@ -1046,6 +1074,7 @@ def run_api(
 
 def fetch_sport_events(sport_label: str, api_key: str) -> list[dict[str, Any]]:
     # Free-tier event list used for active-sport detection. Returns [] on any error.
+    socket.setdefaulttimeout(CONFIG.api_timeout_seconds)
     sport_key = SPORT_CONFIG.get(sport_label)
     if not sport_key or not api_key or not api_key.strip():
         return []
@@ -1072,6 +1101,7 @@ def fetch_sport_events(sport_label: str, api_key: str) -> list[dict[str, Any]]:
 
 def fetch_freshness() -> dict[str, Any]:
     """Fetch per-book staleness from /v1/freshness (no API key required)."""
+    socket.setdefaulttimeout(CONFIG.api_timeout_seconds)
     session = _new_api_session()
     try:
         response = session.get(f"{API_BASE_URL}/freshness", timeout=CONFIG.api_timeout_seconds)
@@ -1123,6 +1153,7 @@ def stale_book_keys(freshness: dict[str, Any], max_age_seconds: int | None = Non
 
 def fetch_injuries(sport_label: str, api_key: str) -> list[dict[str, Any]]:
     """Fetch the current injury report for a sport (free tier, any key)."""
+    socket.setdefaulttimeout(CONFIG.api_timeout_seconds)
     sport_key = SPORT_CONFIG.get(sport_label)
     if not sport_key or not api_key or not api_key.strip():
         return []
