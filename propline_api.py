@@ -947,37 +947,39 @@ def _run_api_with_key(
 ) -> dict[str, Any]:
     max_workers = max(1, min(CONFIG.api_max_workers, len(sports)))
     results = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_fetch_sport, sport, mode, api_key, quota_state_file): sport
-            for sport in sports
-        }
-        try:
-            for future in as_completed(futures, timeout=CONFIG.api_timeout_seconds * len(sports) + 30):
-                try:
-                    results.append(future.result())
-                except Exception as error:
-                    sport = futures[future]
-                    results.append(
-                        {
-                            "quotes": [],
-                            "errors": [f"{sport}: {error}"],
-                            "warnings": [],
-                            "quota": {},
-                        }
-                    )
-        except (TimeoutError, FuturesTimeoutError):
-            for future, sport in futures.items():
-                if not future.done():
-                    future.cancel()
-                    results.append(
-                        {
-                            "quotes": [],
-                            "errors": [f"{sport}: timed out after {CONFIG.api_timeout_seconds}s"],
-                            "warnings": [],
-                            "quota": {},
-                        }
-                    )
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    futures = {
+        executor.submit(_fetch_sport, sport, mode, api_key, quota_state_file): sport
+        for sport in sports
+    }
+    try:
+        for future in as_completed(futures, timeout=CONFIG.api_timeout_seconds * len(sports) + 30):
+            try:
+                results.append(future.result())
+            except Exception as error:
+                sport = futures[future]
+                results.append(
+                    {
+                        "quotes": [],
+                        "errors": [f"{sport}: {error}"],
+                        "warnings": [],
+                        "quota": {},
+                    }
+                )
+    except (TimeoutError, FuturesTimeoutError):
+        for future, sport in futures.items():
+            if not future.done():
+                future.cancel()
+                results.append(
+                    {
+                        "quotes": [],
+                        "errors": [f"{sport}: timed out after {CONFIG.api_timeout_seconds}s"],
+                        "warnings": [],
+                        "quota": {},
+                    }
+                )
+    finally:
+        executor.shutdown(wait=False)
 
     quotes = [quote for result in results for quote in result["quotes"]]
     errors = [error for result in results for error in result["errors"]]
