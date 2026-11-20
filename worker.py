@@ -1700,10 +1700,11 @@ def run_worker(
             else:
                 print(f"[FALLBACK +EV ALERT] {alert_key}:\n{message}\n")
         else:
+            # Dry run (or no Telegram configured): report only. Nothing is
+            # recorded in the dedupe history, otherwise a test run would
+            # silently suppress the real alert for the same opportunity.
             print(f"[CONSOLE +EV ALERT] {alert_key} (+{ev:.2f}% EV):\n{message}\n")
             ev_alerts_sent += 1
-            history[alert_key] = {"ev": ev, "timestamp": now_ts}
-            increment_daily_count(history, "ev", now_utc, now_ts)
 
     arb_alerts_sent = 0
     for arb in select_arb_alerts(valid_arbs, history, now_utc)[
@@ -1724,12 +1725,12 @@ def run_worker(
             else:
                 print(f"[FALLBACK ARB ALERT] {arb_key}:\n{message}\n")
         else:
+            # See the +EV branch: dry runs must not poison the dedupe history.
             print(f"[CONSOLE ARB ALERT] {arb_key} (+{roi:.2f}% ROI):\n{message}\n")
             arb_alerts_sent += 1
-            history[arb_key] = {"roi": roi, "timestamp": now_ts}
-            increment_daily_arb_counts(history, arb, now_utc, now_ts)
 
-    save_alert_history(history, history_file)
+    if not dry_run:
+        save_alert_history(history, history_file)
     print(
         f"Alert cycle complete. +EV alerts: {ev_alerts_sent}, "
         f"Arb alerts: {arb_alerts_sent}. Total active tracked items: {len(history)}."

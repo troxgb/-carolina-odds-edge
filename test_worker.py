@@ -1,8 +1,10 @@
+import io
 import json
 import os
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -445,6 +447,105 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(result["ev_alerts_sent"], 1)
             self.assertEqual(result["arb_alerts_sent"], 1)
             self.assertEqual(mock_send.call_count, 2)
+
+    def test_dry_run_does_not_poison_alert_history(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hist_file = os.path.join(tmpdir, "alert_history.json")
+            cache_file = os.path.join(tmpdir, "cached_odds.json")
+            seed = {"sentinel": {"ev": 1.0, "timestamp": 1.0}}
+            save_alert_history(seed, hist_file)
+
+            future_kickoff = (
+                datetime.now(timezone.utc) + timedelta(hours=3)
+            ).isoformat()
+            mock_opps = [
+                {
+                    "event_id": "dry-event",
+                    "sport": "NBA",
+                    "matchup": "Team A vs Team B",
+                    "market": "Spread -2.5",
+                    "selection": "Team A",
+                    "line": -2.5,
+                    "sportsbook": "FanDuel",
+                    "odds_american": -110,
+                    "odds_decimal": 1.91,
+                    "fair_probability": 0.56,
+                    "ev_pct": 4.5,
+                    "kickoff": future_kickoff,
+                }
+            ]
+            mock_arbs = [
+                {
+                    "sport": "NBA",
+                    "event_id": "dry-event",
+                    "matchup": "Team A vs Team B",
+                    "market": "Moneyline",
+                    "kickoff": future_kickoff,
+                    "total_stake": 500.0,
+                    "implied_probability_sum": 0.9307,
+                    "profit": 37.2,
+                    "roi_pct": 7.44,
+                    "locked_payout": 537.2,
+                    "legs": [
+                        {
+                            "selection": "Team A",
+                            "sportsbook": "FanDuel",
+                            "odds_decimal": 2.2,
+                            "stake": 244.0,
+                            "payout": 536.8,
+                        },
+                        {
+                            "selection": "Team B",
+                            "sportsbook": "DraftKings",
+                            "odds_decimal": 2.1,
+                            "stake": 256.0,
+                            "payout": 537.6,
+                        },
+                    ],
+                }
+            ]
+
+            with (
+                patch("worker.run_api") as mock_run_api,
+                patch("worker.scan_pinnacle_ev") as mock_scan,
+                patch("worker.find_arbitrage_opportunities") as mock_find_arb,
+                patch("worker.send_telegram_message") as mock_send,
+            ):
+                mock_run_api.return_value = {
+                    "quotes": [{"event_id": "dry-event", "kickoff": future_kickoff}],
+                    "errors": [],
+                    "warnings": [],
+                }
+                mock_scan.return_value = {"opportunities": mock_opps}
+                mock_find_arb.return_value = mock_arbs
+                mock_send.return_value = True
+
+                with patch.dict(
+                    os.environ,
+                    {
+                        "PROPLINE_API_KEY": "test_api_key",
+                        "TELEGRAM_BOT_TOKEN": "bot_token",
+                        "TELEGRAM_CHAT_ID": "chat_id",
+                    },
+                ):
+                    with (
+                        patch("worker.in_peak_window", return_value=True),
+                        redirect_stdout(io.StringIO()),
+                    ):
+                        result = run_worker(
+                            sports=["NBA"],
+                            min_ev=3.0,
+                            min_arb_roi=1.0,
+                            history_file=hist_file,
+                            cache_file=cache_file,
+                            dry_run=True,
+                        )
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["ev_alerts_sent"], 1)
+            self.assertEqual(result["arb_alerts_sent"], 1)
+            mock_send.assert_not_called()
+            self.assertEqual(load_alert_history(hist_file), seed)
 
     def test_get_api_keys_ordering_and_fallback(self):
         with patch.dict(
