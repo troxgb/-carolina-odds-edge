@@ -54,6 +54,12 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(MAX_SINGLE_BET, 300.0)
         self.assertEqual(DEFAULT_MIN_ARB_ROI, 1.0)
 
+    def test_freshness_windows_are_split(self):
+        # API payload stays small; local scan tolerates PropLine's typical
+        # 2-5 minute last_update lag.
+        self.assertEqual(CONFIG.api_max_age_seconds, 60)
+        self.assertEqual(CONFIG.max_quote_age_seconds, 300)
+
     def test_filter_eligible_arbs_drops_profit_below_floor_after_cap(self):
         now = datetime(2026, 11, 20, 22, 0, tzinfo=timezone.utc)
         kickoff = (now + timedelta(hours=3)).isoformat()

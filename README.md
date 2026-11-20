@@ -208,9 +208,13 @@ $10.00 in profit.
   is shown only when the minimum leg payout still clears the total stake by at
   least $10.00. The worker additionally keeps each leg at or below $300 and
   caps the total stake at $300.
-  Quotes without a timestamp or older than `max_quote_age_seconds` are filtered
-  by PropLine and again locally before arbitrage calculation. The UI snapshot
-  does not auto-refresh; scan again before acting.
+  PropLine filters the API response with `api_max_age_seconds` (60s), while the
+  scanner rejects locally stale quotes using `max_quote_age_seconds` (300s).
+  The two are deliberately separate: PropLine's `last_update` values are
+  typically 2-5 minutes old, so a 60s local window discarded ~97% of quotes
+  and hid real opportunities, while raising the API-side window only increased
+  payload size and memory. The UI snapshot does not auto-refresh; scan again
+  before acting.
   Stake allocations use the selected whole-dollar rounding increment; the app
   recalculates and displays only opportunities whose rounded stakes still
   guarantee a positive return.

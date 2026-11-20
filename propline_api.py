@@ -814,7 +814,7 @@ def _fetch_sport(
             "bookmakers": ",".join(
                 [*APPROVED_BOOKMAKERS, CONFIG.pinnacle_bookmaker_key]
             ),
-            "max_age": CONFIG.max_quote_age_seconds,
+            "max_age": CONFIG.api_max_age_seconds,
         }
         if CONFIG.include_depth:
             params["includeDepth"] = "true"

@@ -10,7 +10,14 @@ class ScannerConfig:
     min_ev_pct: float = 2.0
     min_liquidity_dollars: float = 25.0
     verify_ev_pct: float = 15.0
-    max_quote_age_seconds: int = 60
+    # Scanner staleness: PropLine last_update values are usually 2-5 minutes
+    # old (only ~3% of quotes are <=60s), so a 60s window discarded ~97% of
+    # candidates. In an A/B test 300s surfaced two 3.5%+ EV alerts that 60s
+    # dropped entirely. Kept separate from the API-side max_age below.
+    max_quote_age_seconds: int = 300
+    # API-side max_age stays at 60s: raising it to 300s added 42% more quotes
+    # (16k -> 25k, +55MB peak RSS) but produced no additional opportunities.
+    api_max_age_seconds: int = 60
     # The free tier returns every alternate/milestone line, which made up ~94%
     # of each response (one NCAAF call was 41 MB / 83k quotes). Keeping only
     # "main" lines cut a scan from 4 minutes to ~15 seconds on the 1 GB VPS.
