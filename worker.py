@@ -120,8 +120,10 @@ ARB_ROI_MAX_PCT = 5.0
 ARB_MIN_PROFIT_DOLLARS = 20.0  # Minimum guaranteed profit per alerted arb card
 PEAK_START_HOUR_ET = 17  # 5:00 PM Eastern
 PEAK_END_HOUR_ET = 20  # 8:00 PM Eastern (exclusive)
-DAILY_EV_ALERT_LIMIT = 1  # +EV alerts per Eastern day, peak window only
-DAILY_ARB_ALERT_LIMIT = 2  # Arb alerts per Eastern day
+# Daily alert caps removed: alert every qualifying opportunity (subject to
+# dedup history and peak window for +EV).
+DAILY_EV_ALERT_LIMIT = 10**9
+DAILY_ARB_ALERT_LIMIT = 10**9
 DAILY_NCAAB_SPREAD_TOTAL_ARB_LIMIT = 1  # NCAAB spread/total arbs per Eastern day
 CANT_MISS_SPORTS = {"nfl", "nba"}
 
@@ -1177,7 +1179,7 @@ def select_arb_alerts(
     for arb in candidates:
         roi = float(arb.get("roi_pct", 0.0))
         profit = float(arb.get("profit", 0.0))
-        if not (ARB_ROI_MIN_PCT <= roi <= ARB_ROI_MAX_PCT):
+        if roi < ARB_ROI_MIN_PCT:
             continue
         if profit < ARB_MIN_PROFIT_DOLLARS - 1e-9:
             continue

@@ -68,31 +68,31 @@ class EvSelectionTests(unittest.TestCase):
         self.assertEqual(len(chosen), 1)
         self.assertEqual(chosen[0]["sportsbook"], "FanDuel")
 
-    def test_daily_cap_of_one_ev_alert(self):
+    def test_multiple_ev_alerts_allowed_per_day(self):
         candidates = [ev_opp("DraftKings", 6.0, event_id="g1"), ev_opp("DraftKings", 5.0, event_id="g2")]
         chosen = worker.select_ev_alerts(candidates, {}, PEAK)
-        self.assertEqual([c["event_id"] for c in chosen], ["g1"])
+        self.assertEqual([c["event_id"] for c in chosen], ["g1", "g2"])
 
-    def test_daily_cap_is_respected_when_already_used(self):
+    def test_daily_cap_removed_allows_ev_alerts(self):
         history = {worker._daily_key("ev", PEAK): {"count": 1, "timestamp": 0}}
-        self.assertEqual(worker.select_ev_alerts([ev_opp("DraftKings", 9.0)], history, PEAK), [])
+        self.assertEqual(len(worker.select_ev_alerts([ev_opp("DraftKings", 9.0)], history, PEAK)), 1)
 
 
 class ArbSelectionTests(unittest.TestCase):
-    def test_roi_must_be_between_one_and_five_percent(self):
-        candidates = [arb(0.5, 225.0, event_id="low"), arb(6.0, 225.0, event_id="high"), arb(3.0, 225.0, event_id="ok")]
+    def test_roi_must_be_at_least_one_percent(self):
+        candidates = [arb(0.5, 25.0, event_id="low"), arb(6.0, 25.0, event_id="high"), arb(3.0, 25.0, event_id="ok")]
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
-        self.assertEqual([a["event_id"] for a in chosen], ["ok"])
+        self.assertEqual([a["event_id"] for a in chosen], ["high", "ok"])
 
     def test_profit_must_be_at_least_twenty_dollars(self):
-        candidates = [arb(3.0, 225.0, event_id="big_enough"), arb(1.2, 0.5, event_id="too_small")]
+        candidates = [arb(3.0, 25.0, event_id="big_enough"), arb(1.2, 0.5, event_id="too_small")]
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
         self.assertEqual([a["event_id"] for a in chosen], ["big_enough"])
 
-    def test_two_arbs_per_day_maximum(self):
+    def test_all_eligible_arbs_are_returned(self):
         candidates = [arb(r, 25.0, event_id=f"e{i}") for i, r in enumerate([4.0, 3.5, 2.0])]
         chosen = worker.select_arb_alerts(candidates, {}, PEAK)
-        self.assertEqual(len(chosen), 2)
+        self.assertEqual(len(chosen), 3)
 
     def test_ncaab_spread_or_total_arb_limited_to_one_per_day(self):
         candidates = [
