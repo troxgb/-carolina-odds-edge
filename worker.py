@@ -214,7 +214,6 @@ def _atomic_write_text(path: str, text: str) -> None:
     with open(temporary_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text)
         handle.flush()
-        os.fsync(handle.fileno())
     last_error: OSError | None = None
     for attempt in range(5):
         try:
