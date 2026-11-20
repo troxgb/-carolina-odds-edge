@@ -688,15 +688,16 @@ def parse_odds_payload(
                     elif not player_prop:
                         expected = sorted(observed)
 
+                    # Only build the fields downstream consumers read. The VPS
+                    # has 1 GB of RAM, so every unused key across ~130k quotes
+                    # per scan costs real memory and swap.
                     quote = {
                         "event_id": str(event_id),
                         "sport": sport_label,
-                        "league": event.get("sport_title") or "",
                         "matchup": f"{home} vs {away}",
                         "kickoff": event.get("commence_time") or "",
                         "is_live": event.get("live") is True,
                         "completed": event.get("completed") is True,
-                        "match_link": "",
                         "market": _market_label(
                             market_key, point, team, player_name
                         ),
@@ -716,11 +717,6 @@ def parse_odds_payload(
                         "liquidity_updated_at": outcome.get(
                             "liquidity_updated_at"
                         ),
-                        "depth": outcome.get("depth"),
-                        "book_outcome_id": outcome.get("book_outcome_id"),
-                        "book_event_id": bookmaker.get("book_event_id"),
-                        "link": bookmaker.get("link"),
-                        "payout_multiplier": outcome.get("payout_multiplier"),
                         "last_update": market.get("last_update"),
                         "last_change_at": outcome.get("last_change_at"),
                         "last_seen_at": outcome.get("last_seen_at"),
@@ -852,7 +848,17 @@ def _fetch_sport(
             for event in payload
             if _event_is_in_mode(event, mode, datetime.now(EASTERN))
         ]
-        result["quotes"] = parse_odds_payload(matching_events, sport_label)
+        # Drop the unfiltered response tree before parsing: holding the raw
+        # payload and the parsed quotes at the same time is what pushed the
+        # worker into swap on the 1 GB VPS.
+        payload = None
+        quotes: list[dict[str, Any]] = []
+        for index in range(len(matching_events)):
+            event = matching_events[index]
+            matching_events[index] = None
+            if event is not None:
+                quotes.extend(parse_odds_payload([event], sport_label))
+        result["quotes"] = quotes
         if not result["quotes"]:
             result["warnings"].append(
                 f"{sport_label}: No {mode} odds were returned for the selected markets."

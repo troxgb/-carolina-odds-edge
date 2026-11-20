@@ -207,14 +207,7 @@ def _new_telegram_session() -> requests.Session:
 # ---------------------------------------------------------------------------
 
 
-def _atomic_write_text(path: str, text: str) -> None:
-    """Write ``path`` atomically through a sibling ``.tmp`` file."""
-    directory = os.path.dirname(os.path.abspath(path))
-    os.makedirs(directory, exist_ok=True)
-    temporary_path = f"{path}.tmp"
-    with open(temporary_path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(text)
-        handle.flush()
+def _replace_with_retry(temporary_path: str, path: str) -> None:
     last_error: OSError | None = None
     for attempt in range(5):
         try:
@@ -229,8 +222,31 @@ def _atomic_write_text(path: str, text: str) -> None:
         raise last_error
 
 
+def _atomic_write_text(path: str, text: str) -> None:
+    """Write ``path`` atomically through a sibling ``.tmp`` file."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    temporary_path = f"{path}.tmp"
+    with open(temporary_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+        handle.flush()
+    _replace_with_retry(temporary_path, path)
+
+
 def _atomic_write_json(path: str, data: Any) -> None:
-    _atomic_write_text(path, json.dumps(data, indent=2))
+    """Write ``path`` atomically without materialising the whole JSON string.
+
+    ``json.dumps`` over a cached scan (~130k quotes) built a >78 MB string on
+    top of the in-memory quotes, which is enough to exhaust a 1 GB VPS. Compact
+    separators also cut the on-disk cache by roughly a third.
+    """
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    temporary_path = f"{path}.tmp"
+    with open(temporary_path, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(data, handle, separators=(",", ":"))
+        handle.flush()
+    _replace_with_retry(temporary_path, path)
 
 
 def _load_cached_json(path: str, ttl_seconds: float) -> dict[str, Any] | None:
@@ -901,12 +917,17 @@ _QUOTE_CACHE_FIELDS = frozenset({
     "sport", "event_id", "matchup", "kickoff", "is_live", "completed",
     "market", "market_key", "period", "team", "point", "expected_outcomes",
     "selection", "sportsbook", "bookmaker_key", "odds_american", "odds_decimal",
-    "liquidity", "last_update", "last_change_at", "last_seen_at", "book_updated_at",
+    "price_format", "liquidity", "liquidity_updated_at", "last_update",
+    "last_change_at", "last_seen_at", "book_updated_at",
     "is_player_prop", "player_id", "player_name", "line_type",
 })
 
 
 def _trim_quote(quote: dict[str, Any]) -> dict[str, Any]:
+    # Quotes parsed by ``propline_api.parse_odds_payload`` already contain only
+    # these fields, so avoid copying 130k dicts per scan.
+    if not quote.keys() - _QUOTE_CACHE_FIELDS:
+        return quote
     return {key: quote.get(key) for key in _QUOTE_CACHE_FIELDS if key in quote}
 
 
