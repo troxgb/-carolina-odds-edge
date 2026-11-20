@@ -107,7 +107,17 @@ using SQLite transactions. It does not commit or push to Git, so it can run
 outside version control on a schedule:
 
 ```cron
-*/10 * * * * cd /opt/nc-odds-edge && /opt/nc-odds-edge/.venv/bin/python worker.py >> worker.log 2>&1
+*/10 * * * * cd /opt/nc-odds-edge && /usr/bin/flock -n /tmp/odds_worker.lock timeout 300 /opt/nc-odds-edge/.venv/bin/python -u worker.py >> worker.log 2>&1
+```
+
+Use `flock` and `python -u` together: `flock` keeps two scans from running at
+once, and `-u` keeps the log readable if a run is ever killed. A manual
+`--dry-run` should take the same lock, otherwise it competes with a cron scan
+for memory on a small VPS:
+
+```bash
+cd /opt/carolina-odds-edge && flock -w 300 /tmp/odds_worker.lock \
+  .venv/bin/python -u worker.py --dry-run
 ```
 
 Required environment variables:
