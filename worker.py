@@ -110,14 +110,15 @@ MAX_HISTORY_AGE_SECONDS = 48 * 3600  # 48 hours
 # Risk and Bankroll Limits: Never suggest a single bet over $300.
 MAX_SINGLE_BET = 300.0
 DEFAULT_MIN_ARB_ROI = 1.0  # 1.0% minimum ROI for Arbitrage alerts
-ARBITRAGE_TARGET_TOTAL_STAKE = 150.0  # Total stake per arb card (bankroll-sized)
+ARBITRAGE_TARGET_TOTAL_STAKE = 300.0  # Total stake per arb card (bankroll-sized)
 
 # --- Alert filters (tuned for a $1,000 bankroll and a low-notification goal) ---
 ET_ZONE = ZoneInfo("America/New_York")
 EV_AMERICAN_MIN = -150  # Only odds from -150 up through +200 for +EV alerts
 EV_AMERICAN_MAX = 200
 ARB_ROI_MIN_PCT = 1.0
-ARB_MIN_PROFIT_DOLLARS = 20.0  # Minimum guaranteed profit per alerted arb card
+ARB_MIN_PROFIT_DOLLARS = 10.0  # Minimum guaranteed profit per alerted arb card
+ARB_MAX_TOTAL_STAKE_DOLLARS = 300.0  # Maximum total stake (both legs) per arb card
 PEAK_START_HOUR_ET = 15  # 3:00 PM Eastern (weekdays)
 PEAK_END_HOUR_ET = 20  # 8:00 PM Eastern (exclusive, weekdays)
 WEEKEND_PEAK_START_HOUR_ET = 9  # 9:00 AM Eastern (weekends)
@@ -1043,9 +1044,10 @@ def fetch_odds_with_fallback(
 def apply_arbitrage_size_limits(
     arb: dict[str, Any],
     max_leg_stake: float | None = None,
+    max_total_stake: float | None = None,
     rounding_step: int = 1,
 ) -> bool:
-    """Apply the per-leg stake limit to an arbitrage card in place."""
+    """Apply the per-leg and total-stake limits to an arbitrage card in place."""
     legs = arb.get("legs") or []
     if len(legs) != 2:
         return False
@@ -1053,6 +1055,8 @@ def apply_arbitrage_size_limits(
     if any(price <= 1 for price in odds):
         return False
     requested_total = int(float(arb.get("total_stake", 0)))
+    if max_total_stake is not None and requested_total > int(max_total_stake):
+        requested_total = int(max_total_stake)
     sizing = size_arbitrage_stakes(
         odds,
         requested_total,
@@ -1518,6 +1522,7 @@ def run_worker(
         apply_arbitrage_size_limits(
             arb,
             max_leg_stake=max_bet_cap,
+            max_total_stake=ARB_MAX_TOTAL_STAKE_DOLLARS,
             rounding_step=1,
         )
         roi = float(arb.get("roi_pct", 0.0))

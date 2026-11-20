@@ -1629,6 +1629,10 @@ def find_arbitrage_opportunities(
     ):
         raise ValueError("Rounding step must be a positive whole-dollar amount.")
     total_stake = int(total_stake)
+    total_stake = min(
+        total_stake,
+        int(getattr(config, "max_arb_total_stake_dollars", total_stake)),
+    )
     now_utc = now or datetime.now(timezone.utc)
     if now_utc.tzinfo is None:
         now_utc = now_utc.replace(tzinfo=timezone.utc)

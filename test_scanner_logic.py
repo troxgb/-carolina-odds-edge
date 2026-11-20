@@ -648,21 +648,21 @@ class ExistingScannerBehaviorTests(unittest.TestCase):
                 "selection": "Away",
                 "expected_outcomes": ["Home", "Away"],
                 "sportsbook": "B",
-                "odds_decimal": 1.7,
+                "odds_decimal": 1.8,
                 "last_seen_at": "2026-11-13T10:00:00Z",
             },
         ]
         opportunities = find_arbitrage_opportunities(
             quotes,
-            2000,
+            300,
             rounding_step=1,
             now=datetime(2026, 11, 13, 10, 1, tzinfo=timezone.utc),
         )
         self.assertEqual(len(opportunities), 1)
         arb = opportunities[0]
-        self.assertEqual(sum(leg["stake"] for leg in arb["legs"]), 2000)
+        self.assertEqual(sum(leg["stake"] for leg in arb["legs"]), 300)
         self.assertGreater(arb["profit"], 0)
-        self.assertAlmostEqual(arb["profit"], arb["locked_payout"] - 2000)
+        self.assertAlmostEqual(arb["profit"], arb["locked_payout"] - 300)
         first_leg = next(leg for leg in arb["legs"] if leg["sportsbook"] == "A")
         self.assertEqual(first_leg["odds_american"], 150)
         self.assertEqual(first_leg["liquidity"], 400)
@@ -1103,7 +1103,7 @@ class PlayerPropAndArbitrageSafetyTests(unittest.TestCase):
             [],
         )
 
-    def test_arbitrage_requires_at_least_twenty_profit_at_the_stake(self):
+    def test_arbitrage_requires_at_least_ten_profit_at_the_stake(self):
         # 2.5/1.7 at a $100 stake guarantees about $1.20, below the $20 floor.
         low_profit = [
             quote("DraftKings", "Home", 2.5, expected=["Home", "Away"]),
@@ -1126,9 +1126,9 @@ class PlayerPropAndArbitrageSafetyTests(unittest.TestCase):
         )
         self.assertEqual(len(opportunities), 1)
         arb = opportunities[0]
-        self.assertEqual(arb["total_stake"], 1000)
-        self.assertGreater(arb["profit"], 20.0)
-        self.assertEqual(arb["min_guaranteed_profit"], 20.0)
+        self.assertEqual(arb["total_stake"], 300)
+        self.assertGreater(arb["profit"], 10.0)
+        self.assertEqual(arb["min_guaranteed_profit"], 10.0)
         self.assertGreaterEqual(
             min(leg["payout"] for leg in arb["legs"]), arb["total_stake"]
         )
@@ -1151,7 +1151,7 @@ class PlayerPropAndArbitrageSafetyTests(unittest.TestCase):
         self.assertEqual(arb["player_name"], "Player One")
         self.assertEqual({leg["selection"] for leg in arb["legs"]}, {"Over", "Under"})
         self.assertEqual({float(leg["line"]) for leg in arb["legs"]}, {24.5})
-        self.assertGreaterEqual(arb["profit"], 20.0)
+        self.assertGreaterEqual(arb["profit"], 10.0)
 
     def test_player_prop_arbitrage_matches_when_one_venue_omits_player_id(self):
         over = prop_quote(

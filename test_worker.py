@@ -410,7 +410,7 @@ class WorkerTests(unittest.TestCase):
 
             self.assertTrue(result["success"])
             self.assertEqual(result["eligible_opportunities"], 1)
-            # Fixture arb is 7.4% ROI / $37.20 profit: clears the 1% ROI floor and $20 profit minimum.
+            # Fixture arb is 7.4% ROI / $37.20 profit: clears the 1% ROI floor and $10 profit minimum.
             self.assertEqual(result["eligible_arbitrages"], 1)
             self.assertEqual(result["ev_alerts_sent"], 1)
             self.assertEqual(result["arb_alerts_sent"], 1)

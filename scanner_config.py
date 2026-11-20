@@ -65,7 +65,10 @@ class ScannerConfig:
     worker_max_ev_pct: float | None = None
     # Arbitrage alerts are shown only when the rounded stakes still guarantee
     # at least this much profit. This is a floor, not a cap.
-    min_arb_guaranteed_profit_dollars: float = 20.0
+    min_arb_guaranteed_profit_dollars: float = 10.0
+    # Maximum total stake (both legs) per arbitrage card. Protects bankroll
+    # early on; the sizer scales down to fit.
+    max_arb_total_stake_dollars: float = 300.0
     # NCAAB is the noisiest sport; use a stricter liquidity floor for it.
     ncaab_min_liquidity_dollars: float = 100.0
 

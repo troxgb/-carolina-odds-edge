@@ -123,7 +123,7 @@ still carry the existing high-EV "verify" flag. Kelly stakes are reported in
 0.25u increments (1u = 1% of bankroll). Arbitrage alerts show both legs, venue,
 odds, stake, locked payout, and player-prop details when applicable; an
 opportunity is only alerted when its rounded stakes still guarantee at least
-$20.00 in profit.
+$10.00 in profit.
 
 ## Calculations and scan quality
 
@@ -184,10 +184,11 @@ $20.00 in profit.
   player (ID, or normalized name when the ID is missing), and identical line;
   props without any player identity are ignored, selections must be Over and
   Under, and one-way milestone outcomes such as `30+` are ignored. Arbitrage is
-  filtered by a $20.00 minimum guaranteed
+  filtered by a $10.00 minimum guaranteed
   profit at the configured stake: after whole-dollar rounding, the opportunity
   is shown only when the minimum leg payout still clears the total stake by at
-  least $20.00. The worker additionally keeps each leg at or below $300.
+  least $10.00. The worker additionally keeps each leg at or below $300 and
+  caps the total stake at $300.
   Quotes without a timestamp or older than `max_quote_age_seconds` are filtered
   by PropLine and again locally before arbitrage calculation. The UI snapshot
   does not auto-refresh; scan again before acting.
