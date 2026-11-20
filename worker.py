@@ -50,6 +50,7 @@ from propline_api import (
     fetch_sport_events,
     injured_player_names,
     record_quota,
+    remaining_quota_for_key,
     run_api,
     select_api_keys,
     stale_book_keys,
@@ -1045,6 +1046,20 @@ def fetch_odds_with_fallback(
     for index, key in enumerate(keys):
         used_key = key
         key_label = f"Key #{index + 1}"
+        # Check persisted quota before spending a request: rolling over after
+        # a full scan doubled both latency and quota use.
+        known_remaining = remaining_quota_for_key(key, quota_state_file)
+        if (
+            known_remaining is not None
+            and known_remaining < failover_threshold
+            and index + 1 < len(keys)
+        ):
+            print(
+                f"Skipping PropLine {key_label}: {known_remaining} requests left "
+                f"(below the {failover_threshold} failover threshold).",
+                file=sys.stderr,
+            )
+            continue
         print(f"Fetching odds using PropLine {key_label}...")
         result = run_api(
             sports,

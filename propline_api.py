@@ -315,6 +315,30 @@ def _supported_market(market_key: Any) -> bool:
     return base in GAME_MARKETS or base.startswith("player_")
 
 
+# The free tier returns every alternate and milestone line for a market. Only
+# "main" lines (or rows with no line_type) are kept: alternates made up ~94% of
+# returned quotes (one NCAAF request was 41 MB / ~83k quotes) and alternate
+# points are rarely comparable across books, so they only cost RAM and swap.
+_KEPT_LINE_TYPES = frozenset({"main"})
+
+
+def _is_main_line(market: dict[str, Any]) -> bool:
+    line_type = market.get("line_type")
+    if line_type is None:
+        return True
+    return str(line_type).strip().casefold() in _KEPT_LINE_TYPES
+
+
+def _configured_prop_markets(sport_label: str) -> frozenset[str]:
+    sport_key = SPORT_CONFIG.get(sport_label)
+    if not sport_key:
+        return frozenset()
+    return frozenset(
+        str(market).casefold()
+        for market in CONFIG.player_prop_markets_for_sport(sport_key)
+    )
+
+
 def _normalize_name(value: Any) -> str:
     if not isinstance(value, str):
         return ""
@@ -510,6 +534,7 @@ def parse_odds_payload(
     accepted_bookmakers = set(APPROVED_BOOKMAKERS) | {
         CONFIG.pinnacle_bookmaker_key
     }
+    allowed_prop_markets = _configured_prop_markets(sport_label)
     for event in events:
         event_id = event.get("id")
         home = event.get("home_team")
@@ -544,6 +569,13 @@ def parse_odds_payload(
                     continue
                 market_key = market.get("key")
                 if not _supported_market(market_key):
+                    continue
+                if not _is_main_line(market):
+                    continue
+                if is_player_prop_market(market_key) and (
+                    str(market_key).split(":", 1)[0].casefold()
+                    not in allowed_prop_markets
+                ):
                     continue
                 player_prop = is_player_prop_market(market_key)
                 for outcome in market.get("outcomes", []):
@@ -598,6 +630,13 @@ def parse_odds_payload(
                     continue
                 market_key = market.get("key")
                 if not _supported_market(market_key):
+                    continue
+                if not _is_main_line(market):
+                    continue
+                if is_player_prop_market(market_key) and (
+                    str(market_key).split(":", 1)[0].casefold()
+                    not in allowed_prop_markets
+                ):
                     continue
                 player_prop = is_player_prop_market(market_key)
                 for outcome in market.get("outcomes", []):
@@ -835,6 +874,11 @@ def _fetch_sport(
                 f"{sport_label}: PropLine returned invalid JSON: {error}."
             )
             return result
+        finally:
+            # Release the response (and its raw body, ~41 MB for NCAAF) before
+            # parsing quotes so both copies are never alive at once.
+            response.close()
+            del response
         if not isinstance(payload, list) or not all(
             isinstance(event, dict) for event in payload
         ):
