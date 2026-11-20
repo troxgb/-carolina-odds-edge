@@ -177,7 +177,8 @@ $20.00 in profit.
   lines that quote the same sign for both teams are separate wagers, not
   opposite sides, and are never paired. Three-way moneylines (including a draw)
   are ignored even when the draw quote is missing, and totals must be the same
-  line's Over and Under. Pinnacle is a
+  line's Over and Under. NCAAB additionally requires main lines only, a $100
+  liquidity floor, and excludes player props from arbitrage. Pinnacle is a
   reference only and is excluded from every arbitrage leg, even if a feed
   payload or manual input includes it. Player props match on event, market,
   player (ID, or normalized name when the ID is missing), and identical line;

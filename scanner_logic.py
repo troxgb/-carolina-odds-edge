@@ -697,7 +697,13 @@ def scan_pinnacle_ev(
         quote for quote in ev_quotes if _is_pinnacle_quote(quote, config)
     ]
     bettable_quotes = [
-        quote for quote in ev_quotes if not _is_pinnacle_quote(quote, config)
+        quote
+        for quote in ev_quotes
+        if not _is_pinnacle_quote(quote, config)
+        and not (
+            str(quote.get("sport") or "").casefold() == "ncaab"
+            and str(quote.get("line_type") or "").casefold() == "alternate"
+        )
     ]
     diagnostics["bettable_quotes"] = len(bettable_quotes)
 
@@ -842,6 +848,12 @@ def scan_pinnacle_ev(
             diagnostics["dropped"]["missing_start_time"] += 1
             continue
         liquidity = quote.get("liquidity")
+        min_liquidity = config.min_liquidity_dollars
+        if str(quote.get("sport") or "").casefold() == "ncaab":
+            min_liquidity = max(
+                min_liquidity,
+                getattr(config, "ncaab_min_liquidity_dollars", min_liquidity),
+            )
         if liquidity is not None and not isinstance(liquidity, bool):
             try:
                 liquidity_dollars = float(liquidity)
@@ -850,7 +862,7 @@ def scan_pinnacle_ev(
             if (
                 liquidity_dollars is not None
                 and isfinite(liquidity_dollars)
-                and liquidity_dollars < config.min_liquidity_dollars
+                and liquidity_dollars < min_liquidity
             ):
                 diagnostics["dropped"]["below_min_liquidity"] += 1
                 continue
@@ -1665,6 +1677,27 @@ def find_arbitrage_opportunities(
         odds = float(quote["odds_decimal"])
         if not isfinite(odds) or odds <= 1:
             continue
+
+        # NCAAB efficiency filters: skip player props, alternate lines, and
+        # thin markets on the noisiest sport.
+        if str(quote.get("sport") or "").casefold() == "ncaab":
+            if is_player_prop_quote(quote):
+                continue
+            line_type = str(quote.get("line_type") or "").casefold()
+            if line_type == "alternate":
+                continue
+            liquidity = quote.get("liquidity")
+            if liquidity is not None and not isinstance(liquidity, bool):
+                try:
+                    liq = float(liquidity)
+                except (TypeError, ValueError):
+                    liq = None
+                if (
+                    liq is not None
+                    and isfinite(liq)
+                    and liq < getattr(config, "ncaab_min_liquidity_dollars", config.min_liquidity_dollars)
+                ):
+                    continue
 
         player_prop = is_player_prop_quote(quote)
         player_scope = ""

@@ -66,6 +66,8 @@ class ScannerConfig:
     # Arbitrage alerts are shown only when the rounded stakes still guarantee
     # at least this much profit. This is a floor, not a cap.
     min_arb_guaranteed_profit_dollars: float = 20.0
+    # NCAAB is the noisiest sport; use a stricter liquidity floor for it.
+    ncaab_min_liquidity_dollars: float = 100.0
 
     # --- PropLine quota management ------------------------------------------
     quota_state_file: str = "quota_state.json"

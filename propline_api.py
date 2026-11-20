@@ -697,6 +697,7 @@ def parse_odds_payload(
                         "market": _market_label(
                             market_key, point, team, player_name
                         ),
+                        "line_type": market.get("line_type"),
                         "market_key": group_key,
                         "period": period,
                         "team": team,
