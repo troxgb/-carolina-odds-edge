@@ -15,6 +15,7 @@ from worker import (
     MAX_SINGLE_BET,
     _atomic_write_json,
     apply_arbitrage_size_limits,
+    filter_eligible_arbs,
     build_alert_key,
     build_arbitrage_alert_key,
     check_and_welcome_new_members,
@@ -50,6 +51,35 @@ class WorkerTests(unittest.TestCase):
     def test_max_single_bet_cap_constant(self):
         self.assertEqual(MAX_SINGLE_BET, 300.0)
         self.assertEqual(DEFAULT_MIN_ARB_ROI, 1.0)
+
+    def test_filter_eligible_arbs_drops_profit_below_floor_after_cap(self):
+        now = datetime(2026, 11, 20, 22, 0, tzinfo=timezone.utc)
+        kickoff = (now + timedelta(hours=3)).isoformat()
+
+        def arb(odds):
+            return {
+                "kickoff": kickoff,
+                "total_stake": 600,
+                "roi_pct": 5.0,
+                "legs": [
+                    {"odds_decimal": odds, "stake": 300},
+                    {"odds_decimal": odds, "stake": 300},
+                ],
+            }
+
+        # 2.05/2.05 is a real 2.4% arb, but $300 total only guarantees ~$7.32,
+        # below the $10 floor. 2.40/2.40 clears it comfortably.
+        thin = arb(2.05)
+        fat = arb(2.40)
+
+        kept = filter_eligible_arbs(
+            [thin, fat], now, min_arb_roi=1.0, max_bet_cap=300.0
+        )
+
+        self.assertEqual(kept, [fat])
+        self.assertLess(thin["profit"], 10.0)
+        self.assertGreaterEqual(fat["profit"], 10.0)
+        self.assertLessEqual(fat["total_stake"], 300.0)
 
     def test_is_game_started(self):
         now = datetime(2026, 11, 17, 20, 0, 0, tzinfo=timezone.utc)

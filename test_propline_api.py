@@ -40,6 +40,51 @@ class PropLineApiTests(unittest.TestCase):
         self.assertIsNone(american_to_decimal(0))
         self.assertIsNone(american_to_decimal("110"))
 
+    def test_alternate_lines_and_unconfigured_props_are_dropped(self):
+        events = [
+            {
+                "id": "event-lines",
+                "home_team": "Home",
+                "away_team": "Away",
+                "bookmakers": [
+                    {
+                        "key": "draftkings",
+                        "markets": [
+                            {
+                                "key": "totals",
+                                "line_type": "main",
+                                "outcomes": [
+                                    {"name": "Over", "price": -110, "point": 44.5},
+                                    {"name": "Under", "price": -110, "point": 44.5},
+                                ],
+                            },
+                            {
+                                "key": "totals",
+                                "line_type": "alternate",
+                                "outcomes": [
+                                    {"name": "Over", "price": -105, "point": 52.5},
+                                    {"name": "Under", "price": -115, "point": 52.5},
+                                ],
+                            },
+                            {
+                                "key": "player_turnovers",
+                                "line_type": "main",
+                                "outcomes": [
+                                    {"name": "Over", "price": -110, "point": 2.5},
+                                    {"name": "Under", "price": -110, "point": 2.5},
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+        ]
+
+        quotes = parse_odds_payload(events, "NBA")
+
+        self.assertEqual({quote["point"] for quote in quotes}, {44.5})
+        self.assertFalse(any(quote["is_player_prop"] for quote in quotes))
+
     def test_approved_bookmaker_quotes_keep_reported_liquidity(self):
         events = [
             {

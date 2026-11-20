@@ -8,7 +8,7 @@ import threading
 # Bound all socket operations (including DNS resolution) globally.
 socket.setdefaulttimeout(10)
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -998,34 +998,37 @@ def _run_api_with_key(
     quota_state_file: str | None,
 ) -> dict[str, Any]:
     max_workers = max(1, min(CONFIG.api_max_workers, len(sports)))
-    results = []
+    results: list[dict[str, Any]] = []
     executor = ThreadPoolExecutor(max_workers=max_workers)
     futures = {
         executor.submit(_fetch_sport, sport, mode, api_key, quota_state_file): sport
         for sport in sports
     }
+    # Budget each sport separately: one stalled request must not cancel the
+    # sports queued behind it. The socket default timeout bounds the request
+    # itself, so this only catches a thread that still will not finish.
+    per_sport_budget = CONFIG.api_timeout_seconds * 2 + 10
     try:
-        for future in as_completed(futures, timeout=CONFIG.api_timeout_seconds * len(sports) + 30):
-            try:
-                results.append(future.result())
-            except Exception as error:
-                sport = futures[future]
-                results.append(
-                    {
-                        "quotes": [],
-                        "errors": [f"{sport}: {error}"],
-                        "warnings": [],
-                        "quota": {},
-                    }
-                )
-    except (TimeoutError, FuturesTimeoutError):
         for future, sport in futures.items():
-            if not future.done():
+            try:
+                results.append(future.result(timeout=per_sport_budget))
+            except FuturesTimeoutError:
                 future.cancel()
                 results.append(
                     {
                         "quotes": [],
-                        "errors": [f"{sport}: timed out after {CONFIG.api_timeout_seconds}s"],
+                        "errors": [
+                            f"{sport}: no response within {per_sport_budget}s."
+                        ],
+                        "warnings": [],
+                        "quota": {},
+                    }
+                )
+            except Exception as error:
+                results.append(
+                    {
+                        "quotes": [],
+                        "errors": [f"{sport}: {error}"],
                         "warnings": [],
                         "quota": {},
                     }

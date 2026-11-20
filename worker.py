@@ -1136,6 +1136,45 @@ def apply_arbitrage_size_limits(
     return True
 
 
+def filter_eligible_arbs(
+    raw_arbs: list[dict[str, Any]],
+    now_utc: datetime,
+    min_arb_roi: float,
+    max_bet_cap: float,
+    min_profit_dollars: float = ARB_MIN_PROFIT_DOLLARS,
+) -> list[dict[str, Any]]:
+    """Keep arbs that stay eligible after the stake caps are applied.
+
+    ``find_arbitrage_opportunities`` sizes at a larger target stake, so
+    re-capping the total to $300 lowers the guaranteed profit. An arb that
+    drops below ``min_profit_dollars`` at the capped stake is not alertable and
+    must not be cached.
+    """
+    valid: list[dict[str, Any]] = []
+    for arb in raw_arbs:
+        commence_time = arb.get("kickoff") or arb.get("commence_time")
+        if is_game_started(commence_time, now_utc):
+            continue
+        if not apply_arbitrage_size_limits(
+            arb,
+            max_leg_stake=max_bet_cap,
+            max_total_stake=ARB_MAX_TOTAL_STAKE_DOLLARS,
+            rounding_step=1,
+        ):
+            continue
+        if float(arb.get("roi_pct", 0.0)) < min_arb_roi:
+            continue
+        if float(arb.get("profit", 0.0)) < min_profit_dollars - 1e-9:
+            continue
+        if any(
+            float(leg.get("stake", 0.0)) > max_bet_cap
+            for leg in arb.get("legs", [])
+        ):
+            continue
+        valid.append(arb)
+    return valid
+
+
 # ---------------------------------------------------------------------------
 # Main cycle
 # ---------------------------------------------------------------------------
@@ -1596,7 +1635,8 @@ def run_worker(
     )
 
     # Arbitrage: Pinnacle is excluded inside the engine and only opportunities
-    # that guarantee at least $20 after rounding are kept.
+    # that still guarantee the minimum profit after the $300 stake cap is
+    # applied are kept.
     raw_arbs = find_arbitrage_opportunities(
         quotes,
         total_stake=ARBITRAGE_TARGET_TOTAL_STAKE,
@@ -1604,23 +1644,12 @@ def run_worker(
         config=scanner_cfg,
         now=now_utc,
     )
-    valid_arbs = []
-    for arb in raw_arbs:
-        commence_time = arb.get("kickoff") or arb.get("commence_time")
-        if is_game_started(commence_time, now_utc):
-            continue
-        apply_arbitrage_size_limits(
-            arb,
-            max_leg_stake=max_bet_cap,
-            max_total_stake=ARB_MAX_TOTAL_STAKE_DOLLARS,
-            rounding_step=1,
-        )
-        roi = float(arb.get("roi_pct", 0.0))
-        if roi < min_arb_roi:
-            continue
-        if not all(float(leg.get("stake", 0.0)) <= max_bet_cap for leg in arb.get("legs", [])):
-            continue
-        valid_arbs.append(arb)
+    valid_arbs = filter_eligible_arbs(
+        raw_arbs,
+        now_utc=now_utc,
+        min_arb_roi=min_arb_roi,
+        max_bet_cap=max_bet_cap,
+    )
 
     print(
         f"Found {len(valid_arbs)} eligible Arbitrage opportunities "
