@@ -11,6 +11,14 @@ with OddsJam.
 The app uses PropLine's API (`https://api.prop-line.com`) for real-time game
 lines. Each selected sport is fetched with one bulk request for `h2h`, `spreads`,
 and `totals`; the app does not poll automatically or make one request per event.
+PropLine's free tier ignores the requested market list closely enough to return
+every **alternate and milestone line** as well — 94% of each payload. Only main
+lines (`line_type` of `main`, or rows with no line type) are kept by default via
+`ScannerConfig.main_lines_only`, because alternate points are rarely comparable
+across books and one NCAAF response alone was 41 MB / 83k quotes. Turning the
+flag off restores alternate lines but needs far more than the 1 GB VPS this runs
+on. Player-prop rows are additionally limited to the markets configured in
+`player_prop_markets_by_sport`.
 For NBA/NCAAB the same request also asks for `player_points`, `player_rebounds`,
 and `player_assists`; for NFL/NCAAF it asks for `player_pass_yds`,
 `player_rush_yds`, and `player_reception_yds`. Player props are used only to find
@@ -25,8 +33,9 @@ Fanatics, theScore Bet, Novig, and ProphetX) and Pinnacle. Pinnacle
 is collected only as a sharp reference and never shown as a bettable venue.
 No automatic retry is
 made when a rate or daily quota limit is reached.
-Each sport is fetched in its own HTTPS session, with up to three sports in
-flight at once. Direct PropLine connections use the host's IPv4 address because
+Each sport is fetched in its own HTTPS session, one sport at a time
+(`api_max_workers=1`) so a single large payload never overlaps another in
+memory. Direct PropLine connections use the host's IPv4 address because
 the local IPv6 route was observed to fail TLS intermittently; hostname and
 certificate validation remain enabled. Transient TLS handshake failures are
 retried up to four times with exponential backoff, and connect/read timeouts

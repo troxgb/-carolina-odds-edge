@@ -323,6 +323,8 @@ _KEPT_LINE_TYPES = frozenset({"main"})
 
 
 def _is_main_line(market: dict[str, Any]) -> bool:
+    if not CONFIG.main_lines_only:
+        return True
     line_type = market.get("line_type")
     if line_type is None:
         return True

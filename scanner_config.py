@@ -11,6 +11,11 @@ class ScannerConfig:
     min_liquidity_dollars: float = 25.0
     verify_ev_pct: float = 15.0
     max_quote_age_seconds: int = 60
+    # The free tier returns every alternate/milestone line, which made up ~94%
+    # of each response (one NCAAF call was 41 MB / 83k quotes). Keeping only
+    # "main" lines cut a scan from 4 minutes to ~15 seconds on the 1 GB VPS.
+    # Set to False to also scan alternate lines (needs a much larger host).
+    main_lines_only: bool = True
     # Free-tier PropLine enrichments (opt-in; increase payload size).
     include_depth: bool = False
     include_book_ids: bool = False
