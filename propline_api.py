@@ -1114,11 +1114,9 @@ def stale_book_keys(freshness: dict[str, Any], max_age_seconds: int | None = Non
             if staleness is not None and int(staleness) > threshold:
                 stale.add(key)
                 break
-        if key in stale:
-            continue
-        worst = book.get("worst_staleness_seconds")
-        if worst is not None and int(worst) > threshold * 2:
-            stale.add(key)
+        # worst_staleness_seconds is the age of the oldest non-suspended market on
+        # the active board and is expected to be large; it is not a staleness
+        # signal. Only is_stale / per-class staleness above the threshold count.
     return stale
 
 
