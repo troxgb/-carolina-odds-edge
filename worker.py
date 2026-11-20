@@ -887,6 +887,21 @@ def check_and_welcome_new_members(bot_token: str, chat_id: str) -> int:
 # ---------------------------------------------------------------------------
 
 
+# Fields retained when caching quotes. Trimming keeps cached_odds.json small
+# (was 130MB+ with full quotes) and avoids disk-I/O hangs on slow VPS disks.
+_QUOTE_CACHE_FIELDS = frozenset({
+    "sport", "event_id", "matchup", "kickoff", "is_live", "completed",
+    "market", "market_key", "period", "team", "point", "expected_outcomes",
+    "selection", "sportsbook", "bookmaker_key", "odds_american", "odds_decimal",
+    "liquidity", "last_update", "last_change_at", "last_seen_at", "book_updated_at",
+    "is_player_prop", "player_id", "player_name", "line_type",
+})
+
+
+def _trim_quote(quote: dict[str, Any]) -> dict[str, Any]:
+    return {key: quote.get(key) for key in _QUOTE_CACHE_FIELDS if key in quote}
+
+
 def save_cached_odds(
     quotes: list[dict[str, Any]],
     opportunities: list[dict[str, Any]],
@@ -901,7 +916,7 @@ def save_cached_odds(
         "quotes_count": len(quotes),
         "opportunities_count": len(opportunities),
         "arbitrage_count": len(arbitrage),
-        "quotes": quotes,
+        "quotes": [_trim_quote(q) for q in quotes],
         "opportunities": opportunities,
         "arbitrage": arbitrage,
     }
@@ -1339,6 +1354,17 @@ def run_worker(
                 [s for s in ACTIVE_SPORTS if s in AUTO_INCLUDE_SPORTS], cached_payload
             )
 
+    # Validate scan_sports against SPORT_CONFIG.
+    invalid = [s for s in scan_sports if s not in SPORT_CONFIG]
+    if invalid:
+        print(f"CONFIG ERROR: Unknown sports in scan list: {', '.join(invalid)}", file=sys.stderr)
+        return {
+            "success": False,
+            "error": f"Unknown sports: {', '.join(invalid)}",
+            "ev_alerts_sent": 0,
+            "arb_alerts_sent": 0,
+        }
+
     if api_keys:
         keys_to_use = [key for key in api_keys if key and key.strip()]
     elif api_key:
@@ -1674,7 +1700,36 @@ def main() -> None:
         return
 
     dry_run = "--dry-run" in sys.argv
+    timeout_seconds = None
+    for arg in sys.argv:
+        if arg.startswith("--timeout="):
+            try:
+                timeout_seconds = int(arg.split("=", 1)[1])
+            except ValueError:
+                pass
+    if timeout_seconds is None:
+        env_timeout = os.getenv("WORKER_TIMEOUT_SECONDS", "").strip()
+        if env_timeout:
+            try:
+                timeout_seconds = int(env_timeout)
+            except ValueError:
+                pass
+    if timeout_seconds is not None:
+        # Apply a hard timeout to the entire process.
+        try:
+            import signal
+
+            def _hard_timeout(signum, frame):
+                print(f"ERROR: Worker hard timeout ({timeout_seconds}s) reached.", file=sys.stderr)
+                os._exit(1)
+
+            signal.signal(signal.SIGALRM, _hard_timeout)
+            signal.alarm(timeout_seconds)
+        except (AttributeError, ValueError, OSError):
+            pass
     result = run_worker(dry_run=dry_run)
+    if not result.get("success", False):
+        sys.exit(1)
     if not result.get("success", False):
         sys.exit(1)
 
