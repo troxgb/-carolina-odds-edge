@@ -1241,6 +1241,22 @@ def run_worker(
     """Run one scan-and-alert cycle for +EV and arbitrage."""
     now_utc = datetime.now(timezone.utc)
     now_ts = time.time()
+
+    # Self-timeout: prevent indefinite hangs (Unix only). 240s leaves margin
+    # before the cron's 300s timeout.
+    _alarm_set = False
+    try:
+        import signal
+
+        def _timeout_handler(signum, frame):
+            print("ERROR: Worker timed out after 240s; exiting.", file=sys.stderr)
+            os._exit(1)
+
+        signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(240)
+        _alarm_set = True
+    except (AttributeError, ValueError, OSError):
+        pass  # Windows or non-main thread; rely on cron timeout instead
     history_file = history_file or os.getenv(
         "ALERT_HISTORY_FILE", ALERT_HISTORY_FILE
     )
@@ -1448,9 +1464,12 @@ def run_worker(
                 players = cached.get("players", [])
             return players
 
-        with _TPE(max_workers=3) as pool:
+        pool = _TPE(max_workers=3)
+        try:
             for players in pool.map(_fetch_one_injury, list(scan_sports)):
                 injured_names.update(injured_player_names(players, skip_statuses))
+        finally:
+            pool.shutdown(wait=False)
         if injured_names:
             before = len(quotes)
             quotes = [
@@ -1615,6 +1634,13 @@ def run_worker(
         f"Alert cycle complete. +EV alerts: {ev_alerts_sent}, "
         f"Arb alerts: {arb_alerts_sent}. Total active tracked items: {len(history)}."
     )
+
+    try:
+        import signal
+
+        signal.alarm(0)
+    except (AttributeError, ValueError, OSError):
+        pass
 
     return {
         "success": True,
