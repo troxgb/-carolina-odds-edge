@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 import requests
@@ -14,6 +14,8 @@ from propline_api import (
     get_rotating_api_keys,
     load_quota_state,
     parse_odds_payload,
+    record_quota,
+    remaining_quota_for_key,
     run_api,
     sport_markets,
 )
@@ -874,6 +876,33 @@ class PropLineApiTests(unittest.TestCase):
             )
             self.assertEqual(
                 get_rotating_api_keys(afternoon), ["key_two", "key_one"]
+            )
+
+    def test_expired_quota_window_is_not_treated_as_exhausted(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            quota_file = os.path.join(tmpdir, "quota_state.json")
+            now = datetime(2026, 11, 21, 18, 0, tzinfo=timezone.utc)
+            past = int((now - timedelta(hours=1)).timestamp())
+            future = int((now + timedelta(hours=6)).timestamp())
+
+            record_quota(
+                "key_a",
+                {"X-Daily-Remaining": "2", "X-Daily-Reset": str(past)},
+                quota_file,
+                now=now,
+            )
+            # The count predates PropLine's 00:00 UTC reset, so it must not
+            # bench the key for the new window.
+            self.assertIsNone(remaining_quota_for_key("key_a", quota_file, now=now))
+
+            record_quota(
+                "key_b",
+                {"X-Daily-Remaining": "2", "X-Daily-Reset": str(future)},
+                quota_file,
+                now=now,
+            )
+            self.assertEqual(
+                remaining_quota_for_key("key_b", quota_file, now=now), 2
             )
 
     def test_low_primary_quota_fails_over_to_secondary_key(self):

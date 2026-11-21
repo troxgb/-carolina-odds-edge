@@ -137,6 +137,12 @@ Optional variables include `WORKER_MIN_EV_PCT` (default `3.5`),
 `python worker.py --dry-run` to print alerts without sending them, or
 `python worker.py --send-guide` to post the onboarding message.
 
+If a Telegram group is upgraded to a supergroup, its numeric chat ID changes and
+every send fails with HTTP 400 `group chat was upgraded to a supergroup chat`.
+The error includes the new ID in `parameters.migrate_to_chat_id`; update
+`TELEGRAM_CHAT_ID` to that value. `getChat` still answers for the old ID, so
+confirm delivery with a real `sendMessage`, not `getChat`.
+
 The +EV worker floor is 3.5% with no upper cap; large edges stay alertable and
 still carry the existing high-EV "verify" flag. Kelly stakes are reported in
 0.25u increments (1u = 1% of bankroll). Arbitrage alerts show both legs, venue,

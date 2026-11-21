@@ -258,13 +258,33 @@ def record_quota(
             pass
 
 
+def _quota_window_expired(entry: dict[str, Any], now: datetime) -> bool:
+    """True when the cached count belongs to a daily window that has rolled over."""
+    reset = entry.get("reset")
+    if reset in (None, ""):
+        return False
+    try:
+        reset_ts = float(reset)
+    except (TypeError, ValueError):
+        return False
+    return now.timestamp() >= reset_ts
+
+
 def remaining_quota_for_key(
-    api_key: str, path: str | None = None
+    api_key: str, path: str | None = None, now: datetime | None = None
 ) -> int | None:
     if not api_key:
         return None
     entry = load_quota_state(path).get("keys", {}).get(_key_fingerprint(api_key))
     if not isinstance(entry, dict):
+        return None
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    # PropLine resets at 00:00 UTC. A count cached before that reset must not
+    # keep a key benched: it would waste the whole fresh window while burning
+    # the other key. Unknown means "usable"; the next response refreshes it.
+    if _quota_window_expired(entry, current):
         return None
     try:
         return int(entry.get("remaining"))
