@@ -18,6 +18,13 @@ class ScannerConfig:
     # API-side max_age stays at 60s: raising it to 300s added 42% more quotes
     # (16k -> 25k, +55MB peak RSS) but produced no additional opportunities.
     api_max_age_seconds: int = 60
+    # Stop alerting this many minutes before the feed's kickoff time. PropLine's
+    # tennis start times can be hours off and team-sport times are sometimes
+    # 30 minutes late (e.g. Florida Atlantic vs South Florida: feed said 3:00 PM
+    # ET, real kickoff 2:30 PM), which let alerts fire after a game was live.
+    # Alerts this close to kickoff are also hard to act on, so the buffer costs
+    # little. It does not replace a real start-time source for tennis.
+    prestart_guard_minutes: int = 30
     # The free tier returns every alternate/milestone line, which made up ~94%
     # of each response (one NCAAF call was 41 MB / 83k quotes). Keeping only
     # "main" lines cut a scan from 4 minutes to ~15 seconds on the 1 GB VPS.

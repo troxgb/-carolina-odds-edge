@@ -348,14 +348,25 @@ def _get_float_env(name: str, default: float) -> float:
 # ---------------------------------------------------------------------------
 
 
-def is_game_started(commence_time_str: str | None, now_utc: datetime) -> bool:
+def is_game_started(
+    commence_time_str: str | None,
+    now_utc: datetime,
+    guard_minutes: float = 0.0,
+) -> bool:
+    """True when the event is live or within ``guard_minutes`` of kickoff.
+
+    The guard exists because provider clocks are not always right: PropLine's
+    team-sport start times can be 30 minutes late and tennis times can be hours
+    off, so treating the advertised kickoff as final let alerts fire for games
+    that were already under way.
+    """
     if not commence_time_str or not isinstance(commence_time_str, str):
         return False
     try:
         dt = datetime.fromisoformat(commence_time_str.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt <= now_utc
+        return dt <= now_utc + timedelta(minutes=guard_minutes)
     except (ValueError, TypeError):
         return False
 
@@ -1153,7 +1164,9 @@ def filter_eligible_arbs(
     valid: list[dict[str, Any]] = []
     for arb in raw_arbs:
         commence_time = arb.get("kickoff") or arb.get("commence_time")
-        if is_game_started(commence_time, now_utc):
+        if is_game_started(
+            commence_time, now_utc, CONFIG.prestart_guard_minutes
+        ):
             continue
         if not apply_arbitrage_size_limits(
             arb,
@@ -1616,7 +1629,9 @@ def run_worker(
         if not in_ev_odds_range(opportunity):
             continue
         commence_time = opportunity.get("kickoff") or opportunity.get("commence_time")
-        if is_game_started(commence_time, now_utc):
+        if is_game_started(
+            commence_time, now_utc, CONFIG.prestart_guard_minutes
+        ):
             continue
         valid_opportunities.append(opportunity)
 

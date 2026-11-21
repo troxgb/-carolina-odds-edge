@@ -184,7 +184,11 @@ $10.00 in profit.
   are starting assumptions in config; validate them against line-adjusted CLV
   before enabling the feature.
 - Quotes older than the configured age, markets over the overround limit, and
-  already-started events are excluded. Rows with EV above 15% remain visible
+  already-started events are excluded. The worker also treats an event as
+  started `prestart_guard_minutes` (default 30) before its advertised kickoff,
+  because provider clocks are sometimes late: Florida Atlantic vs South Florida
+  was listed at 3:00 PM ET when the real kickoff was 2:30 PM, so an alert fired
+  26 minutes into the game. Rows with EV above 15% remain visible
   with a `verify` flag. Each scan reports fetched/kept counts, drop reasons,
   and the minimum, median, and maximum EV. Reported venue liquidity below the
   configured `min_liquidity_dollars` threshold is excluded; the default is

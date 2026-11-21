@@ -100,6 +100,18 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(is_game_started(None, now))
         self.assertFalse(is_game_started("invalid-time", now))
 
+    def test_prestart_guard_blocks_imminent_kickoffs(self):
+        # Provider clocks can run ~30 minutes late, so events inside the guard
+        # window must be treated as unbetable rather than as upcoming.
+        now = datetime(2026, 11, 21, 19, 56, 0, tzinfo=timezone.utc)
+        soon = (now + timedelta(minutes=4)).isoformat()
+        later = (now + timedelta(minutes=45)).isoformat()
+
+        self.assertFalse(is_game_started(soon, now))
+        self.assertTrue(is_game_started(soon, now, guard_minutes=30))
+        self.assertFalse(is_game_started(later, now, guard_minutes=30))
+        self.assertEqual(CONFIG.prestart_guard_minutes, 30)
+
     def test_build_alert_key_with_point_and_line(self):
         opp1 = {
             "event_id": "game-101",
