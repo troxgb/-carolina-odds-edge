@@ -910,7 +910,11 @@ class PropLineApiTests(unittest.TestCase):
         session.close.assert_called_once()
 
     def test_missing_key_does_not_make_a_request(self):
-        with patch("propline_api.requests.Session") as make_session:
+        # With an empty explicit key, run_api consults the environment keys.
+        # Stub that lookup so the test behaves the same on a host with a .env.
+        with patch("propline_api.requests.Session") as make_session, patch(
+            "propline_api.select_api_keys", return_value=[]
+        ):
             result = run_api(["NBA"], api_key="")
 
         self.assertEqual(result["request_count"], 0)
