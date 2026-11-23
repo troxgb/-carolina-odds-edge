@@ -100,8 +100,10 @@ SPORT_CONFIG = {
     "NCAAF": "football_ncaaf",
     "NBA": "basketball_nba",
     "NCAAB": "basketball_ncaab",
+    "WNBA": "basketball_wnba",
     "MLB": "baseball_mlb",
     "NHL": "hockey_nhl",
+    "UFC": "mma_ufc",
 }
 
 APPROVED_BOOKMAKERS = {

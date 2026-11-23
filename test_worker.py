@@ -40,6 +40,7 @@ from worker import (
     worker_ev_settings,
 )
 from scanner_config import CONFIG
+from propline_api import SPORT_CONFIG
 
 
 class WorkerTests(unittest.TestCase):
@@ -49,6 +50,12 @@ class WorkerTests(unittest.TestCase):
             ["NCAAB", "NBA", "WNBA", "NHL", "NFL", "NCAAF", "UFC"],
         )
         self.assertNotIn("MLB", ACTIVE_SPORTS)
+        # Every auto-scanned sport needs a PropLine sport key, otherwise it is
+        # silently never selected (WNBA was missing basketball_wnba).
+        for sport in ACTIVE_SPORTS:
+            self.assertIn(sport, SPORT_CONFIG)
+        self.assertEqual(SPORT_CONFIG["WNBA"], "basketball_wnba")
+        self.assertEqual(SPORT_CONFIG["UFC"], "mma_ufc")
 
     def test_max_single_bet_cap_constant(self):
         self.assertEqual(MAX_SINGLE_BET, 300.0)
