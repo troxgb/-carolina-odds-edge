@@ -759,10 +759,6 @@ def format_telegram_arbitrage_alert(arb: dict[str, Any]) -> str:
     profit = float(arb.get("profit", 0.0))
     roi_pct = float(arb.get("roi_pct", 0.0))
     locked_payout = float(arb.get("locked_payout", total_stake + profit))
-    minimum_profit = arb.get("min_guaranteed_profit")
-    if minimum_profit is None:
-        minimum_profit = CONFIG.min_arb_guaranteed_profit_dollars
-
     legs_html = []
     for index, leg in enumerate(arb.get("legs", []), start=1):
         book = _escaped(leg.get("sportsbook") or "")
@@ -803,8 +799,7 @@ def format_telegram_arbitrage_alert(arb: dict[str, Any]) -> str:
         f"🎯 <b>Market:</b> {market}\n"
         f"💰 <b>Total Stake:</b> ${total_stake:,.0f} (max $300 per bet)\n"
         f"💵 <b>Guaranteed Profit:</b> +${profit:.2f} (ROI: +{roi_pct:.2f}%)\n"
-        f"🔒 <b>Locked Payout:</b> ${locked_payout:,.2f}\n"
-        f"✅ <b>Meets minimum:</b> ${float(minimum_profit):,.2f}\n\n"
+        f"🔒 <b>Locked Payout:</b> ${locked_payout:,.2f}\n\n"
         f"{legs_text}"
     )
 

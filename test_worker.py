@@ -435,6 +435,7 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("Stake: <b>$238</b>", text)
         self.assertIn("Warriors</b> at <b>DraftKings", text)
         self.assertIn("Stake: <b>$262</b>", text)
+        self.assertNotIn("Meets minimum", text)
 
     def test_send_telegram_message_success_and_failure(self):
         with patch("worker._new_telegram_session") as mock_session_factory:
