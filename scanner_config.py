@@ -79,7 +79,19 @@ class ScannerConfig:
     book_fee_pct: tuple[tuple[str, float], ...] = (
         ("DraftKings", 0.0),
         ("FanDuel", 0.0),
+        # ProphetX charges 2% of NET WINNINGS on pre-game straight contracts.
+        # net_decimal_odds() models exactly that (fee on profit, not on stake).
+        # Novig charges $0 on pre-game straights; its 0.06 x P x (1-P) per
+        # contract taker fee only applies to live/futures trades, which this
+        # scanner never requests (mode="upcoming").
+        ("ProphetX", 0.02),
+        ("Novig", 0.0),
     )
+    # Peer-to-peer exchanges whose fill size must be verified before alerting.
+    p2p_exchange_bookmaker_keys: tuple[str, ...] = ("prophetx", "novig")
+    # Reject an exchange alert when the required stake exceeds this share of
+    # the size available at the quoted price (headroom for race conditions).
+    liquidity_buffer_multiplier: float = 0.85
 
     # --- Automated cron worker settings -------------------------------------
     # Every edge at or above this floor is alerted. There is intentionally no

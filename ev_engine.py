@@ -67,15 +67,14 @@ def _reported_liquidity(quote: dict[str, Any]) -> float | None:
     return value if isfinite(value) else None
 
 
-def calculate_capped_kelly_stakes(
-    opportunities: list[dict[str, Any]],
+def _validate_stake_inputs(
     bankroll: float,
     fraction: float,
-    per_bet_cap_fraction: float = CONFIG.max_bet_pct,
-    per_event_cap_fraction: float = CONFIG.max_event_pct,
-    verify_stake_multiplier: float = CONFIG.verify_stake_multiplier,
-    liquidity_stake_fraction: float = CONFIG.liquidity_stake_fraction,
-) -> list[float]:
+    per_bet_cap_fraction: float,
+    per_event_cap_fraction: float,
+    verify_stake_multiplier: float,
+    liquidity_stake_fraction: float | None = None,
+) -> None:
     if not isfinite(bankroll) or bankroll < 0:
         raise ValueError("Bankroll must be a nonnegative finite amount.")
     if not isfinite(fraction) or not 0 <= fraction <= 1:
@@ -89,9 +88,21 @@ def calculate_capped_kelly_stakes(
         raise ValueError("Stake caps must be between 0 and 1.")
     if not isfinite(verify_stake_multiplier) or not 0 <= verify_stake_multiplier <= 1:
         raise ValueError("Verify stake multiplier must be between 0 and 1.")
-    if not isfinite(liquidity_stake_fraction) or not 0 <= liquidity_stake_fraction <= 1:
+    if liquidity_stake_fraction is not None and (
+        not isfinite(liquidity_stake_fraction)
+        or not 0 <= liquidity_stake_fraction <= 1
+    ):
         raise ValueError("Liquidity stake fraction must be between 0 and 1.")
 
+
+def _base_kelly_stakes(
+    opportunities: list[dict[str, Any]],
+    bankroll: float,
+    fraction: float,
+    per_bet_cap_fraction: float,
+    verify_stake_multiplier: float,
+) -> tuple[list[float], dict[tuple[str, str], list[int]]]:
+    """Kelly stakes before event scaling or venue liquidity caps."""
     raw_stakes = []
     events: dict[tuple[str, str], list[int]] = {}
     for index, quote in enumerate(opportunities):
@@ -118,6 +129,68 @@ def calculate_capped_kelly_stakes(
             quote.get("event_id", quote.get("matchup", "")),
         )
         events.setdefault(event_key, []).append(index)
+    return raw_stakes, events
+
+
+def calculate_required_kelly_stakes(
+    opportunities: list[dict[str, Any]],
+    bankroll: float,
+    fraction: float = CONFIG.kelly_fraction,
+    per_bet_cap_fraction: float = CONFIG.max_bet_pct,
+    per_event_cap_fraction: float = CONFIG.max_event_pct,
+    verify_stake_multiplier: float = CONFIG.verify_stake_multiplier,
+    max_single_bet: float | None = None,
+) -> list[float]:
+    """Stake each bet needs, after bankroll caps but BEFORE any liquidity cap.
+
+    This is the number checked against an exchange's available size: capping it
+    at a fraction of the quoted liquidity first would make that check circular.
+    """
+    _validate_stake_inputs(
+        bankroll,
+        fraction,
+        per_bet_cap_fraction,
+        per_event_cap_fraction,
+        verify_stake_multiplier,
+    )
+    raw_stakes, events = _base_kelly_stakes(
+        opportunities, bankroll, fraction, per_bet_cap_fraction,
+        verify_stake_multiplier,
+    )
+    required = [0.0] * len(opportunities)
+    for indices in events.values():
+        event_total = sum(raw_stakes[index] for index in indices)
+        event_cap = bankroll * per_event_cap_fraction
+        scale = min(1.0, event_cap / event_total) if event_total else 0.0
+        for index in indices:
+            stake = raw_stakes[index] * scale
+            if max_single_bet is not None:
+                stake = min(stake, float(max_single_bet))
+            required[index] = float(floor((stake + 1e-9) * 100) / 100)
+    return required
+
+
+def calculate_capped_kelly_stakes(
+    opportunities: list[dict[str, Any]],
+    bankroll: float,
+    fraction: float,
+    per_bet_cap_fraction: float = CONFIG.max_bet_pct,
+    per_event_cap_fraction: float = CONFIG.max_event_pct,
+    verify_stake_multiplier: float = CONFIG.verify_stake_multiplier,
+    liquidity_stake_fraction: float = CONFIG.liquidity_stake_fraction,
+) -> list[float]:
+    _validate_stake_inputs(
+        bankroll,
+        fraction,
+        per_bet_cap_fraction,
+        per_event_cap_fraction,
+        verify_stake_multiplier,
+        liquidity_stake_fraction,
+    )
+    raw_stakes, events = _base_kelly_stakes(
+        opportunities, bankroll, fraction, per_bet_cap_fraction,
+        verify_stake_multiplier,
+    )
 
     recommended = [0.0] * len(opportunities)
     for indices in events.values():

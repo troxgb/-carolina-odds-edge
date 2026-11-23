@@ -46,6 +46,14 @@ def net_decimal_odds(decimal_odds: float, fee: float) -> float:
     return 1 + (decimal_odds - 1) * (1 - fee)
 
 
+def _net_quote_decimal_odds(quote: dict[str, Any], config=CONFIG) -> float:
+    """Decimal odds a quote actually pays after that bookmaker's fee."""
+    return net_decimal_odds(
+        float(quote["odds_decimal"]),
+        _book_fee_fraction(str(quote.get("sportsbook") or ""), config),
+    )
+
+
 def expected_value_pct(decimal_odds: float, fair_probability: float) -> float:
     return _expected_profit_per_dollar(decimal_odds, fair_probability) * 100
 
@@ -1972,8 +1980,8 @@ def find_arbitrage_opportunities(
                 ):
                     continue
                 odds_sum = (
-                    1 / float(first_quote["odds_decimal"])
-                    + 1 / float(second_quote["odds_decimal"])
+                    1 / _net_quote_decimal_odds(first_quote, config)
+                    + 1 / _net_quote_decimal_odds(second_quote, config)
                 )
                 compatible_pairs.append((odds_sum, first_quote, second_quote))
         if not compatible_pairs:
@@ -1988,7 +1996,9 @@ def find_arbitrage_opportunities(
             (selection_names[0], first_quote),
             (selection_names[1], second_quote),
         ]
-        odds = [float(quote["odds_decimal"]) for _, quote in selection_rows]
+        odds = [
+            _net_quote_decimal_odds(quote, config) for _, quote in selection_rows
+        ]
         sizing = size_arbitrage_stakes(odds, total_stake, rounding_step)
         if sizing is None:
             continue
@@ -1998,17 +2008,24 @@ def find_arbitrage_opportunities(
 
         legs = []
         for stake, (selection, quote) in zip(stakes, selection_rows):
-            leg_odds = float(quote["odds_decimal"])
+            leg_odds = _net_quote_decimal_odds(quote, config)
             legs.append(
                 {
                     "selection": selection,
                     "market": quote["market"],
                     "sportsbook": quote["sportsbook"],
+                    "bookmaker_key": quote.get("bookmaker_key"),
                     "player_id": quote.get("player_id"),
                     "player_name": quote.get("player_name"),
                     "line": quote.get("point"),
                     "odds_decimal": leg_odds,
-                    "odds_american": quote.get("odds_american"),
+                    "odds_american": (
+                        _american_from_decimal(leg_odds)
+                        if leg_odds > 1
+                        else quote.get("odds_american")
+                    ),
+                    "odds_decimal_quoted": float(quote["odds_decimal"]),
+                    "odds_american_quoted": quote.get("odds_american"),
                     "liquidity": quote.get("liquidity"),
                     "liquidity_updated_at": quote.get("liquidity_updated_at"),
                     "stake": stake,

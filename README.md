@@ -76,6 +76,29 @@ grounds — eligible alerts are still decided by the quoted EV and the 3.5% floo
 ProphetX ~8 minutes), so treat displayed liquidity as indicative rather than
 a live order book.
 
+#### Exchange fill checks
+
+Before any +EV or arbitrage alert is sent, exchange legs (ProphetX and Novig)
+must prove they can absorb the bet:
+
+- **+EV:** the required stake is full Kelly on bankroll and net odds (bounded
+  only by the $300 single-bet limit, not the 1% display cap). It is shown on the
+  alert as **Min Bet**.
+- **Arbitrage:** the required stake is the exact hedge stake already computed
+  for that leg after the $300 total/per-leg caps.
+
+An exchange with no reported `liquidity`, or with required stake above
+`liquidity * 0.85` (`liquidity_buffer_multiplier`, headroom for race conditions),
+is excluded from alerts and from the cache. Sportsbooks are unaffected because
+their fills are not size-limited in the feed.
+
+Fees are applied to the odds before any EV or arbitrage math. ProphetX charges
+2% of net winnings on pre-game straight contracts (`net_decimal_odds` subtracts
+it from profit); Novig charges nothing on pre-game straights, so its fee entry
+is 0. Its 0.06 × P × (1−P) taker fee applies only to live/futures markets, which
+this scanner never requests. Arbitrage cards show the net odds and label the
+leg "net of exchange fee" when a commission was applied.
+
 ## Run on Windows
 
 From this directory:

@@ -42,7 +42,11 @@ try:  # pragma: no cover - exercised implicitly when python-dotenv is installed
 except ImportError:  # pragma: no cover
     pass
 
-from ev_engine import calculate_capped_kelly_stakes, decimal_to_american
+from ev_engine import (
+    calculate_capped_kelly_stakes,
+    calculate_required_kelly_stakes,
+    decimal_to_american,
+)
 from propline_api import (
     SPORT_CONFIG,
     fetch_freshness,
@@ -702,6 +706,18 @@ def format_telegram_alert(opp: dict[str, Any]) -> str:
     else:
         stake_text = "0u <i>(1u = 1% of bankroll)</i>"
 
+    min_bet_line = ""
+    required = _finite_positive(
+        opp.get("min_bet_amount")
+        if opp.get("min_bet_amount") is not None
+        else opp.get("required_stake")
+    )
+    if required is not None:
+        min_bet_line = (
+            f"\n🔻 <b>Min Bet:</b> ${required:,.2f} "
+            "<i>(Kelly requirement at the quoted price)</i>"
+        )
+
     return (
         f"🚨 <b>+EV Bet Opportunity</b> 🚨\n\n"
         f"🏆 <b>Sport:</b> {sport}\n"
@@ -710,7 +726,7 @@ def format_telegram_alert(opp: dict[str, Any]) -> str:
         f"💰 <b>Odds:</b> {_escaped(odds_str)}{exec_line}\n"
         f"🏢 <b>Sportsbook:</b> {sportsbook}\n"
         f"⚖️ <b>Fair Odds:</b> {_escaped(fair_str)}\n"
-        f"📈 <b>EV%:</b> +{ev_pct:.2f}%\n"
+        f"📈 <b>EV%:</b> +{ev_pct:.2f}%{min_bet_line}\n"
         f"💵 <b>Recommended Stake:</b> {stake_text}"
     )
 
@@ -756,6 +772,15 @@ def format_telegram_arbitrage_alert(arb: dict[str, Any]) -> str:
         odds_str = _format_american(
             leg.get("odds_american"), leg.get("odds_decimal")
         )
+        net_note = ""
+        quoted_decimal = leg.get("odds_decimal_quoted")
+        net_decimal = leg.get("odds_decimal")
+        if quoted_decimal is not None and net_decimal is not None:
+            try:
+                if float(quoted_decimal) - float(net_decimal) > 1e-9:
+                    net_note = " <i>(net of exchange fee)</i>"
+            except (TypeError, ValueError):
+                pass
         liquidity = leg.get("liquidity")
         liquidity_text = ""
         if isinstance(liquidity, (int, float)) and not isinstance(liquidity, bool):
@@ -764,7 +789,7 @@ def format_telegram_arbitrage_alert(arb: dict[str, Any]) -> str:
         legs_html.append(
             f"<b>Leg {index}:</b>\n"
             f"• Bet: <b>{bet_display}</b> at <b>{book}</b>\n"
-            f"• Odds: {_escaped(odds_str)}\n"
+            f"• Odds: {_escaped(odds_str)}{net_note}\n"
             f"• Stake: <b>${stake:,.0f}</b> (Payout: ${payout:,.2f})"
             f"{liquidity_text}"
         )
@@ -1242,6 +1267,99 @@ def filter_eligible_arbs(
 
 
 # ---------------------------------------------------------------------------
+# Peer-to-peer exchange capacity
+# ---------------------------------------------------------------------------
+
+
+def _finite_positive(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def is_p2p_exchange(entry: dict[str, Any]) -> bool:
+    """True for the exchanges whose fills must be verified before alerting."""
+    key = str(entry.get("bookmaker_key") or "").strip().casefold()
+    if key and key in CONFIG.p2p_exchange_bookmaker_keys:
+        return True
+    name = str(entry.get("sportsbook") or "").strip().casefold()
+    return name in {"prophetx", "novig"}
+
+
+def exchange_capacity_rejection(
+    entry: dict[str, Any], required_stake: float
+) -> str | None:
+    """Reason to withhold an alert when an exchange cannot fill the bet.
+
+    Returns ``None`` for non-exchange venues. Exchanges with no reported size,
+    or whose available size at the quoted price is below the required stake
+    times ``liquidity_buffer_multiplier``, are rejected so race conditions do
+    not leave a bet unfilled (or a hedge leg unmatched).
+    """
+    if not is_p2p_exchange(entry):
+        return None
+    liquidity = _finite_positive(entry.get("liquidity"))
+    stake = _finite_positive(required_stake)
+    if liquidity is None:
+        return "no liquidity reported at the target price"
+    if stake is None or stake <= 0:
+        return None
+    multiplier = CONFIG.liquidity_buffer_multiplier
+    allowed = liquidity * multiplier
+    if stake > allowed + 1e-9:
+        return (
+            f"needs ${stake:,.2f} but only ${allowed:,.2f} is available "
+            f"at the quoted price ({multiplier:.0%} of ${liquidity:,.2f})"
+        )
+    return None
+
+
+def filter_exchange_capacity_ev(
+    opportunities: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Drop +EV exchange bets that cannot absorb their required Kelly stake."""
+    kept = []
+    for opportunity in opportunities:
+        reason = exchange_capacity_rejection(
+            opportunity, float(opportunity.get("required_stake") or 0.0)
+        )
+        if reason is not None:
+            print(
+                f"Skipping +EV {opportunity.get('sportsbook')} "
+                f"{opportunity.get('matchup')}: {reason}."
+            )
+            continue
+        kept.append(opportunity)
+    return kept
+
+
+def filter_exchange_capacity_arbs(
+    arbs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Drop arbs whose exchange leg cannot be filled at the exact hedge stake."""
+    kept = []
+    for arb in arbs:
+        rejected = False
+        for leg in arb.get("legs", []):
+            required = float(leg.get("stake") or leg.get("required_stake") or 0.0)
+            reason = exchange_capacity_rejection(leg, required)
+            if reason is not None:
+                print(
+                    f"Skipping arbitrage {arb.get('matchup')} "
+                    f"({leg.get('sportsbook')} leg): {reason}."
+                )
+                rejected = True
+                break
+        if not rejected:
+            for leg in arb.get("legs", []):
+                leg["required_stake"] = float(leg.get("stake") or 0.0)
+            kept.append(arb)
+    return kept
+
+
+# ---------------------------------------------------------------------------
 # Main cycle
 # ---------------------------------------------------------------------------
 
@@ -1695,13 +1813,28 @@ def run_worker(
         valid_opportunities.append(opportunity)
 
     if valid_opportunities:
+        required_stakes = calculate_required_kelly_stakes(
+            valid_opportunities,
+            bankroll=CONFIG.bankroll,
+            fraction=CONFIG.kelly_fraction,
+            # Pure Kelly (not the 1% display cap), bounded only by the $300
+            # single-bet limit, so the liquidity check cannot be circular.
+            per_bet_cap_fraction=1.0,
+            per_event_cap_fraction=1.0,
+            max_single_bet=max_bet_cap,
+        )
         scan_stakes = calculate_capped_kelly_stakes(
             valid_opportunities,
             bankroll=CONFIG.bankroll,
             fraction=CONFIG.kelly_fraction,
         )
-        for opportunity, stake in zip(valid_opportunities, scan_stakes):
+        for opportunity, stake, required in zip(
+            valid_opportunities, scan_stakes, required_stakes
+        ):
             opportunity["kelly_stake"] = min(float(stake), max_bet_cap)
+            opportunity["required_stake"] = float(required)
+            opportunity["min_bet_amount"] = float(required)
+        valid_opportunities = filter_exchange_capacity_ev(valid_opportunities)
 
     print(
         f"Found {len(valid_opportunities)} eligible +EV opportunities "
@@ -1724,6 +1857,7 @@ def run_worker(
         min_arb_roi=min_arb_roi,
         max_bet_cap=max_bet_cap,
     )
+    valid_arbs = filter_exchange_capacity_arbs(valid_arbs)
 
     print(
         f"Found {len(valid_arbs)} eligible Arbitrage opportunities "

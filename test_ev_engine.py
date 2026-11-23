@@ -1,6 +1,6 @@
 import unittest
 
-from ev_engine import calculate_capped_kelly_stakes
+from ev_engine import calculate_capped_kelly_stakes, calculate_required_kelly_stakes
 from scanner_config import CONFIG
 
 
@@ -59,6 +59,29 @@ class VerifyStakeTests(unittest.TestCase):
             calculate_capped_kelly_stakes(
                 [opportunity()], bankroll=1000, fraction=0.25, verify_stake_multiplier=2
             )
+
+
+class RequiredStakeTests(unittest.TestCase):
+    def test_required_stake_ignores_liquidity_but_displayed_stake_does_not(self):
+        row = opportunity(liquidity=8.0)
+        required = calculate_required_kelly_stakes(
+            [row], bankroll=1000, fraction=0.25,
+            per_bet_cap_fraction=1, per_event_cap_fraction=1,
+        )[0]
+        capped = calculate_capped_kelly_stakes(
+            [row], bankroll=1000, fraction=0.25,
+            per_bet_cap_fraction=1, per_event_cap_fraction=1,
+        )[0]
+        self.assertAlmostEqual(required, 66.67, places=2)
+        self.assertEqual(capped, 4.0)
+
+    def test_required_stake_respects_max_single_bet(self):
+        stakes = calculate_required_kelly_stakes(
+            [opportunity()], bankroll=1000, fraction=0.25,
+            per_bet_cap_fraction=1, per_event_cap_fraction=1,
+            max_single_bet=25.0,
+        )
+        self.assertEqual(stakes, [25.0])
 
 
 class LiquidityStakeTests(unittest.TestCase):

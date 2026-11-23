@@ -18,6 +18,10 @@ from worker import (
     _atomic_write_json,
     apply_arbitrage_size_limits,
     filter_eligible_arbs,
+    exchange_capacity_rejection,
+    filter_exchange_capacity_arbs,
+    filter_exchange_capacity_ev,
+    is_p2p_exchange,
     build_alert_key,
     build_arbitrage_alert_key,
     check_and_welcome_new_members,
@@ -266,6 +270,67 @@ class WorkerTests(unittest.TestCase):
         )
         self.assertEqual(_ev_rank({"ev_pct": 6.0}), 6.0)
         self.assertEqual(_ev_rank({"ev_pct": None, "executable_ev_pct": 2.0}), 2.0)
+
+    def test_alert_lists_required_min_bet(self):
+        opp = {
+            "sport": "NBA",
+            "matchup": "Boston Celtics vs Dallas Mavericks",
+            "market": "Moneyline",
+            "selection": "Boston Celtics",
+            "odds_american": -110,
+            "odds_decimal": 1.91,
+            "sportsbook": "DraftKings",
+            "fair_probability": 0.55,
+            "ev_pct": 5.05,
+            "kelly_stake": 12.0,
+            "required_stake": 42.5,
+        }
+        text = format_telegram_alert(opp)
+        self.assertIn("Min Bet:</b> $42.50", text)
+
+    def test_exchange_capacity_uses_buffer_and_requires_liquidity(self):
+        self.assertTrue(is_p2p_exchange({"bookmaker_key": "prophetx"}))
+        self.assertTrue(is_p2p_exchange({"sportsbook": "Novig"}))
+        self.assertFalse(is_p2p_exchange({"sportsbook": "DraftKings"}))
+
+        entry = {"sportsbook": "ProphetX", "liquidity": 100.0}
+        self.assertIsNone(exchange_capacity_rejection(entry, 85.0))
+        reason = exchange_capacity_rejection(entry, 85.01)
+        self.assertIsNotNone(reason)
+        self.assertIn("only $85.00 is available", reason)
+        self.assertIn(
+            "no liquidity",
+            exchange_capacity_rejection({"sportsbook": "Novig", "liquidity": None}, 10),
+        )
+        self.assertIsNone(
+            exchange_capacity_rejection({"sportsbook": "DraftKings"}, 1000)
+        )
+
+    def test_ev_filter_drops_only_unfillable_exchange_bets(self):
+        rows = [
+            {"sportsbook": "ProphetX", "liquidity": 100.0, "required_stake": 90.0},
+            {"sportsbook": "Novig", "liquidity": 100.0, "required_stake": 50.0},
+            {"sportsbook": "DraftKings", "required_stake": 500.0},
+        ]
+        kept = filter_exchange_capacity_ev(rows)
+        self.assertEqual(
+            [row["sportsbook"] for row in kept], ["Novig", "DraftKings"]
+        )
+
+    def test_arb_filter_drops_when_exchange_hedge_exceeds_liquidity(self):
+        arb = {
+            "matchup": "A vs B",
+            "legs": [
+                {"sportsbook": "ProphetX", "stake": 120.0, "liquidity": 100.0},
+                {"sportsbook": "DraftKings", "stake": 80.0},
+            ],
+        }
+        self.assertEqual(filter_exchange_capacity_arbs([arb]), [])
+
+        arb["legs"][0]["stake"] = 80.0
+        kept = filter_exchange_capacity_arbs([arb])
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["legs"][0]["required_stake"], 80.0)
 
     def test_sport_scan_lead_windows(self):
         now = datetime(2026, 11, 23, 18, 0, tzinfo=timezone.utc)

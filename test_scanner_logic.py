@@ -1315,6 +1315,59 @@ class ArbitrageEvaluationTests(unittest.TestCase):
             self.assertIn(section, text)
 
 
+class ExchangeFeeTests(unittest.TestCase):
+    def test_prophetx_fee_lowers_ev_through_net_odds(self):
+        quotes = two_way_quotes(book_a=2.5)
+        quotes[2]["sportsbook"] = "ProphetX"
+        quotes[2]["bookmaker_key"] = "prophetx"
+        result = scan_pinnacle_ev(quotes[:3], now=NOW)
+        row = result["opportunities"][0]
+        # 2% of net winnings: 1 + (2.5 - 1) * 0.98 = 2.47
+        self.assertAlmostEqual(row["odds_decimal_net"], 2.47, places=9)
+        expected = (0.5 * (2.47 - 1) - 0.5) * 100
+        self.assertAlmostEqual(row["ev_pct"], expected, places=9)
+
+    def test_prophetx_arb_uses_net_odds_for_sizing_and_payout(self):
+        def quote_for(book, selection, odds, liquidity):
+            return {
+                "sport": "NBA",
+                "event_id": "game-1",
+                "market_key": "h2h",
+                "period": "",
+                "matchup": "Sample",
+                "market": "Moneyline",
+                "selection": selection,
+                "expected_outcomes": ["Home", "Away"],
+                "sportsbook": book,
+                "odds_american": 150 if odds > 2 else -125,
+                "odds_decimal": odds,
+                "liquidity": liquidity,
+                "last_seen_at": "2026-11-13T10:00:00Z",
+            }
+
+        quotes = [
+            quote_for("ProphetX", "Home", 2.5, 400),
+            quote_for("B", "Away", 1.8, 400),
+        ]
+        arbs = find_arbitrage_opportunities(
+            quotes,
+            300,
+            rounding_step=1,
+            now=datetime(2026, 11, 13, 10, 1, tzinfo=timezone.utc),
+        )
+        self.assertEqual(len(arbs), 1)
+        exchange_leg = next(
+            leg for leg in arbs[0]["legs"] if leg["sportsbook"] == "ProphetX"
+        )
+        self.assertAlmostEqual(exchange_leg["odds_decimal"], 2.47, places=9)
+        self.assertAlmostEqual(exchange_leg["odds_decimal_quoted"], 2.5, places=9)
+        self.assertAlmostEqual(
+            exchange_leg["payout"],
+            round(exchange_leg["stake"] * 2.47, 2),
+            places=9,
+        )
+
+
 class ExecutableOddsTests(unittest.TestCase):
     def test_depth_levels_walk_past_top_liquidity(self):
         result = executable_odds_for_stake(
