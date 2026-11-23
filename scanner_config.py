@@ -29,8 +29,14 @@ class ScannerConfig:
     # "main" lines cut a scan from 4 minutes to ~15 seconds on the 1 GB VPS.
     # Set to False to also scan alternate lines (needs a much larger host).
     main_lines_only: bool = True
-    # Free-tier PropLine enrichments (opt-in; increase payload size).
-    include_depth: bool = False
+    # Order-book depth is required to model the average price a bet can
+    # actually fill at. PropLine returns it only for exchange books; on a full
+    # NBA response it adds ~1.7% to the payload (no extra quota).
+    include_depth: bool = True
+    # Size used when measuring executable EV. PropLine's top-level `liquidity`
+    # is the amount available at the quoted price, and `depth` holds the next
+    # levels; a bet larger than the top level fills some of it at worse odds.
+    executable_odds_probe_stake: float = 100.0
     include_book_ids: bool = False
     include_links: bool = False
     max_pinnacle_overround: float = 1.06

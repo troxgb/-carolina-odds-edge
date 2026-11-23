@@ -737,6 +737,7 @@ class PropLineApiTests(unittest.TestCase):
                     [*APPROVED_BOOKMAKERS, "pinnacle"]
                 ),
                 "max_age": 60,
+                "includeDepth": "true",
             },
         )
         self.assertEqual(

@@ -800,6 +800,7 @@ def parse_odds_payload(
                         "liquidity_updated_at": outcome.get(
                             "liquidity_updated_at"
                         ),
+                        "depth": outcome.get("depth"),
                         "last_update": market.get("last_update"),
                         "last_change_at": outcome.get("last_change_at"),
                         "last_seen_at": outcome.get("last_seen_at"),

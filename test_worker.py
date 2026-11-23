@@ -27,6 +27,7 @@ from worker import (
     format_telegram_alert,
     format_telegram_arbitrage_alert,
     format_welcome_guide,
+    _ev_rank,
     get_api_keys,
     is_game_started,
     load_alert_history,
@@ -37,6 +38,8 @@ from worker import (
     send_telegram_message,
     should_alert,
     should_alert_arbitrage,
+    scan_lead_hours,
+    sport_has_event_in_window,
     worker_ev_settings,
 )
 from scanner_config import CONFIG
@@ -235,6 +238,61 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("EV%:</b> +5.05%", text)
         self.assertIn("Recommended Stake:</b> 30u <i>(1u = 1% of bankroll)</i>", text)
         self.assertNotIn("($300.00)", text)
+
+    def test_alert_shows_executable_price_when_depth_moves_it(self):
+        opp = {
+            "sport": "NBA",
+            "matchup": "Boston Celtics vs Dallas Mavericks",
+            "market": "Moneyline",
+            "selection": "Boston Celtics",
+            "odds_american": 130,
+            "odds_decimal": 2.30,
+            "odds_decimal_executable": 2.2875,
+            "executable_ev_pct": 3.10,
+            "liquidity": 153.0,
+            "sportsbook": "ProphetX",
+            "fair_probability": 0.50,
+            "ev_pct": 3.50,
+            "kelly_stake": 10.0,
+        }
+        text = format_telegram_alert(opp)
+        self.assertIn(
+            "Executable Odds:</b> +129 at $100 (EV +3.10%), top $153", text
+        )
+
+    def test_ev_rank_prefers_executable_ev(self):
+        self.assertEqual(
+            _ev_rank({"ev_pct": 6.0, "executable_ev_pct": 1.5}), 1.5
+        )
+        self.assertEqual(_ev_rank({"ev_pct": 6.0}), 6.0)
+        self.assertEqual(_ev_rank({"ev_pct": None, "executable_ev_pct": 2.0}), 2.0)
+
+    def test_sport_scan_lead_windows(self):
+        now = datetime(2026, 11, 23, 18, 0, tzinfo=timezone.utc)
+        self.assertEqual(scan_lead_hours("NBA"), 48)
+        self.assertEqual(scan_lead_hours("NFL"), 96)
+        self.assertEqual(scan_lead_hours("UFC"), 168)
+        self.assertTrue(
+            sport_has_event_in_window(
+                "NBA", [{"commence_time": "2026-11-25T00:00:00Z"}], now
+            )
+        )
+        self.assertFalse(
+            sport_has_event_in_window(
+                "NBA", [{"commence_time": "2026-11-26T00:00:00Z"}], now
+            )
+        )
+        self.assertTrue(
+            sport_has_event_in_window(
+                "UFC", [{"commence_time": "2026-11-28T00:00:00Z"}], now
+            )
+        )
+        self.assertTrue(sport_has_event_in_window("NBA", [{"live": True}], now))
+        self.assertFalse(
+            sport_has_event_in_window(
+                "NBA", [{"completed": True, "live": True}], now
+            )
+        )
 
     def test_format_welcome_guide_content(self):
         guide = format_welcome_guide("Alex")

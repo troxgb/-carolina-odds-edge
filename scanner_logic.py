@@ -524,6 +524,94 @@ def _american_from_decimal(decimal_odds: float) -> int:
     return int(round(-100 / (decimal_odds - 1)))
 
 
+def _finite_positive(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if isfinite(number) and number > 0 else None
+
+
+def _american_price_to_decimal(value: Any) -> float | None:
+    """Convert a published depth price (American) to decimal odds."""
+    try:
+        american = int(value)
+    except (TypeError, ValueError):
+        return None
+    if american > 0:
+        return 1.0 + american / 100.0
+    if american < 0:
+        return 1.0 - 100.0 / american
+    return None
+
+
+def executable_odds_for_stake(
+    quote: dict[str, Any], target_stake: float
+) -> dict[str, Any]:
+    """Average odds fillable for ``target_stake`` at this quote.
+
+    PropLine reports ``liquidity`` as the size at the quoted price and, for
+    exchange books only, ``depth`` as further price/size levels beyond it. A
+    stake larger than the top level fills part of the bet at worse odds, so the
+    quoted price overstates the edge. Books without size information are
+    valued entirely at the quoted price and flagged as unmodelled.
+    """
+    stake = _finite_positive(target_stake)
+    quoted = _finite_positive(quote.get("odds_decimal"))
+    if stake is None or quoted is None:
+        return {
+            "executable_decimal": quoted or 0.0,
+            "levels_used": 0,
+            "slippage_pct": 0.0,
+            "size_unknown": True,
+        }
+
+    depth = quote.get("depth") or []
+    remaining = stake
+    total_return = 0.0
+    levels_used = 0
+    size_unknown = False
+    top_size = _finite_positive(quote.get("liquidity"))
+    if top_size is None:
+        size_unknown = True
+        total_return = stake * quoted
+    else:
+        top_fill = min(remaining, top_size)
+        total_return += top_fill * quoted
+        remaining -= top_fill
+        for level in depth:
+            if not isinstance(level, dict) or remaining <= 1e-9:
+                continue
+            price = _american_price_to_decimal(level.get("price"))
+            level_size = _finite_positive(level.get("size"))
+            if price is None or price <= 1 or level_size is None:
+                continue
+            fill = min(remaining, level_size)
+            total_return += fill * price
+            remaining -= fill
+            levels_used += 1
+        if remaining > 1e-9:
+            # Past the last published level the price is unknown. Value the
+            # remainder at the worst published level, never at the top price.
+            worst = quoted
+            for level in depth:
+                if not isinstance(level, dict):
+                    continue
+                price = _american_price_to_decimal(level.get("price"))
+                if price is not None and 1 < price < worst:
+                    worst = price
+            total_return += remaining * worst
+            size_unknown = True
+
+    executable = total_return / stake
+    return {
+        "executable_decimal": executable,
+        "levels_used": levels_used,
+        "slippage_pct": (1.0 - executable / quoted) * 100.0,
+        "size_unknown": size_unknown,
+    }
+
+
 def _is_pinnacle_quote(quote: dict[str, Any], config=CONFIG) -> bool:
     bookmaker_key = str(quote.get("bookmaker_key") or "").casefold()
     sportsbook = str(quote.get("sportsbook") or "").casefold()
@@ -679,6 +767,8 @@ def scan_pinnacle_ev(
             "player_prop_excluded": 0,
         },
         "rows_kept": 0,
+        "liquidity_slippage_applied": 0,
+        "liquidity_size_unknown": 0,
         "untimestamped_quotes_used": 0,
         "ev_pct": {"min": None, "median": None, "max": None},
     }
@@ -1029,6 +1119,34 @@ def scan_pinnacle_ev(
         except (KeyError, TypeError, ValueError):
             diagnostics["dropped"]["invalid_pinnacle_market"] += 1
             continue
+
+        # Report both the headline EV at the quoted price and the EV at the
+        # odds that can actually be filled for a normal-sized bet. Eligibility
+        # stays on the quoted EV; executable EV is used for ranking/display so
+        # thin books cannot outrank deeper ones on an unfillable price.
+        execution = executable_odds_for_stake(
+            quote, config.executable_odds_probe_stake
+        )
+        executable_ev_pct = ev_pct
+        if execution["executable_decimal"] > 1:
+            try:
+                exec_ev_decimal = net_decimal_odds(
+                    execution["executable_decimal"], fee
+                )
+                executable_ev_pct = (
+                    expected_value_with_push_pct(
+                        exec_ev_decimal, win_probability, lose_probability
+                    )
+                    if push_probability > 0
+                    else expected_value_pct(exec_ev_decimal, fair_probability)
+                )
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+        if execution["levels_used"]:
+            diagnostics["liquidity_slippage_applied"] += 1
+        if execution["size_unknown"]:
+            diagnostics["liquidity_size_unknown"] += 1
+
         if ev_pct < config.min_ev_pct:
             diagnostics["dropped"]["below_min_ev"] += 1
             continue
@@ -1063,6 +1181,16 @@ def scan_pinnacle_ev(
             "push_probability": push_probability,
             "ev_pct": ev_pct,
             "ev_per_100": ev_pct,
+            "odds_decimal_executable": execution["executable_decimal"],
+            "odds_american_executable": (
+                _american_from_decimal(execution["executable_decimal"])
+                if execution["executable_decimal"] > 1
+                else None
+            ),
+            "executable_ev_pct": executable_ev_pct,
+            "execution_levels_used": execution["levels_used"],
+            "execution_slippage_pct": execution["slippage_pct"],
+            "execution_size_unknown": execution["size_unknown"],
             "pinnacle_american_this_side": pinnacle_side.get("odds_american")
             or _american_from_decimal(float(pinnacle_side["odds_decimal"])),
             "pinnacle_american_other_side": pinnacle_other.get("odds_american")

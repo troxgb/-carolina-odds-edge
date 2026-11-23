@@ -7,6 +7,7 @@ from ev_engine import calculate_capped_kelly_stakes
 from scanner_logic import (
     devig_two_way,
     estimate_line_adjusted_probability,
+    executable_odds_for_stake,
     expected_value_dollars,
     expected_value_pct,
     _standard_deviation_for_sport,
@@ -1312,6 +1313,68 @@ class ArbitrageEvaluationTests(unittest.TestCase):
             "Partial-Fill / Execution Warning:",
         ):
             self.assertIn(section, text)
+
+
+class ExecutableOddsTests(unittest.TestCase):
+    def test_depth_levels_walk_past_top_liquidity(self):
+        result = executable_odds_for_stake(
+            {
+                "odds_decimal": 2.30,
+                "liquidity": 50.0,
+                "depth": [
+                    {"price": 129, "size": 50.0},
+                    {"price": 128, "size": 200.0},
+                ],
+            },
+            200.0,
+        )
+        # 50 @ 2.30 + 50 @ 2.29 + 100 @ 2.28 = 457.50 / 200 = 2.2875
+        self.assertAlmostEqual(result["executable_decimal"], 2.2875, places=9)
+        self.assertEqual(result["levels_used"], 2)
+        self.assertFalse(result["size_unknown"])
+        self.assertAlmostEqual(result["slippage_pct"], 0.543478, places=5)
+
+    def test_no_liquidity_leaves_quoted_price_but_flags_unknown_size(self):
+        result = executable_odds_for_stake({"odds_decimal": 2.05}, 100.0)
+        self.assertEqual(result["executable_decimal"], 2.05)
+        self.assertEqual(result["levels_used"], 0)
+        self.assertTrue(result["size_unknown"])
+        self.assertEqual(result["slippage_pct"], 0.0)
+
+    def test_unmodelled_tail_is_valued_at_worst_published_level(self):
+        result = executable_odds_for_stake(
+            {
+                "odds_decimal": 2.30,
+                "liquidity": 10.0,
+                "depth": [
+                    {"price": 129, "size": 5.0},
+                    {"price": 128, "size": 5.0},
+                ],
+            },
+            100.0,
+        )
+        # 10 @ 2.30 + 5 @ 2.29 + 85 @ 2.28 = 228.25
+        self.assertAlmostEqual(result["executable_decimal"], 2.2825, places=9)
+        self.assertEqual(result["levels_used"], 2)
+        self.assertTrue(result["size_unknown"])
+
+    def test_scan_reports_executable_ev_below_headline_ev(self):
+        quotes = two_way_quotes(book_a=2.5)
+        quotes[2]["liquidity"] = 40.0
+        quotes[2]["depth"] = [
+            {"price": 140, "size": 20.0},
+            {"price": 130, "size": 20.0},
+        ]
+        result = scan_pinnacle_ev(quotes, now=NOW)
+        row = next(
+            item
+            for item in result["opportunities"]
+            if item["sportsbook"] == "DraftKings"
+        )
+        self.assertLess(row["odds_decimal_executable"], row["odds_decimal"])
+        self.assertLess(row["executable_ev_pct"], row["ev_pct"])
+        self.assertEqual(row["execution_levels_used"], 2)
+        self.assertGreater(result["diagnostics"]["liquidity_slippage_applied"], 0)
 
 
 if __name__ == "__main__":

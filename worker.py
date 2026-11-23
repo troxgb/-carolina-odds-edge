@@ -99,6 +99,44 @@ AUTO_INCLUDE_SPORTS = {
 # How far ahead a sport needs an event to be considered "in season".
 SPORT_LOOKAHEAD_DAYS = 7
 
+# Per-sport lead time for *scanning*, capped by SPORT_LOOKAHEAD_DAYS. Early
+# summer lines on the big team sports are thin and rarely move until closer to
+# the game; UFC is the opposite, with the heaviest movement during fight week.
+# These are starting points that can be tuned without touching the scan loop.
+SPORT_SCAN_LEAD_HOURS = {
+    "NBA": 48,
+    "NCAAB": 48,
+    "NHL": 48,
+    "WNBA": 48,
+    "NFL": 96,
+    "NCAAF": 96,
+    "UFC": 24 * 7,
+}
+
+
+def scan_lead_hours(sport: str) -> int:
+    """Lead time in hours for a sport, never exceeding the global 7-day cap."""
+    lead = SPORT_SCAN_LEAD_HOURS.get(str(sport).upper(), SPORT_LOOKAHEAD_DAYS * 24)
+    return min(lead, SPORT_LOOKAHEAD_DAYS * 24)
+
+
+def sport_has_event_in_window(
+    sport: str,
+    events: list[dict[str, Any]] | None,
+    now_utc: datetime,
+) -> bool:
+    """True when the sport has a live event or one inside its own lead window."""
+    cutoff = now_utc + timedelta(hours=scan_lead_hours(sport))
+    for event in events or []:
+        if event.get("completed"):
+            continue
+        if event.get("live"):
+            return True
+        commence = _parse_utc(event.get("commence_time"))
+        if commence is not None and now_utc <= commence <= cutoff:
+            return True
+    return False
+
 ALERT_HISTORY_FILE = "alert_history.json"
 CACHED_ODDS_FILE = "cached_odds.json"
 DEFAULT_MIN_EV_THRESHOLD = CONFIG.worker_min_ev_pct  # 3.5% automated floor
@@ -619,6 +657,23 @@ def format_telegram_alert(opp: dict[str, Any]) -> str:
             pass
 
     ev_pct = float(opp.get("ev_pct", 0.0))
+    exec_line = ""
+    exec_dec = opp.get("odds_decimal_executable")
+    quoted_dec = opp.get("odds_decimal")
+    try:
+        if exec_dec and quoted_dec and float(exec_dec) < float(quoted_dec) - 1e-9:
+            exec_am = decimal_to_american(float(exec_dec))
+            exec_ev = float(opp.get("executable_ev_pct", 0.0))
+            detail = (
+                f"{exec_am:+d} at ${CONFIG.executable_odds_probe_stake:.0f} "
+                f"(EV +{exec_ev:.2f}%)"
+            )
+            liquidity = opp.get("liquidity")
+            if isinstance(liquidity, (int, float)) and not isinstance(liquidity, bool):
+                detail += f", top ${float(liquidity):,.0f}"
+            exec_line = f"\n📉 <b>Executable Odds:</b> {_escaped(detail)}"
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
     raw_stake = opp.get("kelly_stake")
     if raw_stake is None and opp.get("fair_probability") and opp.get("odds_decimal"):
         try:
@@ -652,7 +707,7 @@ def format_telegram_alert(opp: dict[str, Any]) -> str:
         f"🏆 <b>Sport:</b> {sport}\n"
         f"⚔️ <b>Matchup:</b> {matchup}\n"
         f"🎯 <b>Bet / Line:</b> {bet_line}\n"
-        f"💰 <b>Odds:</b> {_escaped(odds_str)}\n"
+        f"💰 <b>Odds:</b> {_escaped(odds_str)}{exec_line}\n"
         f"🏢 <b>Sportsbook:</b> {sportsbook}\n"
         f"⚖️ <b>Fair Odds:</b> {_escaped(fair_str)}\n"
         f"📈 <b>EV%:</b> +{ev_pct:.2f}%\n"
@@ -1260,6 +1315,17 @@ def _bet_group_key(opportunity: dict[str, Any]) -> str:
     )
 
 
+def _ev_rank(opportunity: dict[str, Any]) -> float:
+    """Rank by executable EV when known, otherwise by the quoted EV."""
+    value = opportunity.get("executable_ev_pct")
+    if value is not None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+    return float(opportunity.get("ev_pct", 0.0) or 0.0)
+
+
 def select_ev_alerts(
     candidates: list[dict[str, Any]],
     history: dict[str, dict[str, Any]],
@@ -1275,9 +1341,9 @@ def select_ev_alerts(
     for opportunity in candidates:
         group = _bet_group_key(opportunity)
         current = best.get(group)
-        if current is None or float(opportunity.get("ev_pct", 0.0)) > float(current.get("ev_pct", 0.0)):
+        if current is None or _ev_rank(opportunity) > _ev_rank(current):
             best[group] = opportunity
-    ranked = sorted(best.values(), key=lambda item: float(item.get("ev_pct", 0.0)), reverse=True)
+    ranked = sorted(best.values(), key=_ev_rank, reverse=True)
     chosen = []
     for opportunity in ranked:
         if len(chosen) >= remaining:
@@ -1425,24 +1491,19 @@ def run_worker(
         else:
             events_by_sport = events_cache.get("events", {}) or {}
         now_for_events = datetime.now(timezone.utc)
-        cutoff = now_for_events + timedelta(days=SPORT_LOOKAHEAD_DAYS)
         scan_sports = []
         for sport in ACTIVE_SPORTS:
             if sport not in AUTO_INCLUDE_SPORTS:
                 continue
-            has_upcoming = False
-            for event in events_by_sport.get(sport, []) or []:
-                if event.get("completed"):
-                    continue
-                if event.get("live"):
-                    has_upcoming = True
-                    break
-                commence = _parse_utc(event.get("commence_time"))
-                if commence is not None and now_for_events <= commence <= cutoff:
-                    has_upcoming = True
-                    break
-            if has_upcoming:
+            if sport_has_event_in_window(
+                sport, events_by_sport.get(sport, []) or [], now_for_events
+            ):
                 scan_sports.append(sport)
+            else:
+                print(
+                    f"Skipping {sport}: no event within {scan_lead_hours(sport)}h "
+                    "of now (outside its scan window)."
+                )
         if not scan_sports:
             scan_sports = select_scan_sports(
                 [s for s in ACTIVE_SPORTS if s in AUTO_INCLUDE_SPORTS], cached_payload

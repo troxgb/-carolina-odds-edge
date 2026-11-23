@@ -42,6 +42,40 @@ retried up to four times with exponential backoff, and connect/read timeouts
 are retried once. A failed sport does not prevent the remaining sports from
 being attempted.
 
+### Scan timing
+
+A sport is fetched only when it has a live event or a kickoff inside its own
+scan window. `SPORT_LOOKAHEAD_DAYS = 7` in `worker.py` is the global cap;
+`SPORT_SCAN_LEAD_HOURS` narrows it per sport (NBA/NCAAB/NHL/WNBA 48h,
+NFL/NCAAF 96h, UFC 7 days). This is a quota optimization: early lines on the
+daily team sports are thin and rarely move before the final couple of days,
+while UFC prices move throughout fight week. The windows are starting points
+and can be retuned in one place without touching the scan loop. Sports outside
+their window are logged and skipped; when no sport qualifies, the previous
+cached scan is used as a fallback rather than fetching an empty slate.
+
+### Liquidity and executable odds
+
+`liquidity` is the size available at the quoted price. Only exchange-style
+books report it (Novig, ProphetX, Pinnacle); the five sportsbooks do not, so
+the `$25` / `$100` NCAAB minimum-liquidity floor cannot gate them. PropLine's
+`depth` levels sit *beyond* the quoted price and are returned only for
+ProphetX; enabling `include_depth` costs about 1.7% of a full NBA response and
+no extra quota.
+
+For every row the scanner therefore reports two prices: the quoted price used
+for the headline EV and eligibility, and the average price fillable for a
+`$100` probe stake (`odds_decimal_executable` / `executable_ev_pct`). The top
+`liquidity` fills first, then each published depth level; size beyond the last
+level is valued at the worst published level and flagged as unmodelled. Alert
+selection and ranking use executable EV, so a thin book cannot outrank a deeper
+one on a price that cannot be filled. Nothing is newly dropped on liquidity
+grounds — eligible alerts are still decided by the quoted EV and the 3.5% floor.
+
+`liquidity_updated_at` is often older than the quote (Novig median ~21 minutes,
+ProphetX ~8 minutes), so treat displayed liquidity as indicative rather than
+a live order book.
+
 ## Run on Windows
 
 From this directory:
