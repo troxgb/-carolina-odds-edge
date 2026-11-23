@@ -161,6 +161,11 @@ $10.00 in profit.
   with either team's total; team-total rows show the team in the market label.
 - Duplicate market generations use the newest `last_update`. Outcomes whose
   `last_seen_at` predates that market update are excluded as no longer offered.
+- Pulled markets are excluded: PropLine marks a market `suspended_at` when that
+  book removed it pregame (late scratch or dropped market type) and keeps
+  returning the last quoted legs, which are not a live price. Bookmakers flagged
+  `pregame_only` are excluded too, because on a live event their prices are the
+  frozen last pregame quote.
 - Fair probability comes only from a complete, two-way Pinnacle market on the
   same sport, event, market, period, line, team scope, and selection. Spreads
   must have opposite matching signed points; totals must have matching points.
@@ -171,7 +176,8 @@ $10.00 in profit.
   quoted range and always enforces the maximum line difference.
 - Pinnacle vig is removed with the power method by default. The shared
   `scanner_config.py` config supports `power`, `shin`, or `multiplicative`,
-  alongside the interactive board minimum EV (2%), 60-second quote-age limit,
+  alongside the interactive board minimum EV (2%), the split freshness windows
+  (`api_max_age_seconds` 60s, `max_quote_age_seconds` 300s),
   maximum Pinnacle overround (1.06), bankroll/Kelly caps, and line-adjusted
   controls. The automated worker uses a separate 3.5% floor (`worker_min_ev_pct`)
   and no upper cap (`worker_max_ev_pct = None`). Line
@@ -192,7 +198,11 @@ $10.00 in profit.
   with a `verify` flag. Each scan reports fetched/kept counts, drop reasons,
   and the minimum, median, and maximum EV. Reported venue liquidity below the
   configured `min_liquidity_dollars` threshold is excluded; the default is
-  `$25`, and quotes without a liquidity value are not filtered.
+  `$25` (`$100` for NCAAB), and quotes without a liquidity value are not
+  filtered. PropLine only reports `liquidity` for its exchange books (Novig,
+  ProphetX) and Pinnacle, so the floor cannot gate DraftKings, FanDuel, BetMGM,
+  Fanatics, or theScore Bet — their only cap is the betting rules and the stake
+  limits below.
 - For non-push lines, EV is `(decimal odds * fair probability - 1) * 100`.
   For whole-number spread/total lines, the model estimates win, lose, and push
   probabilities and uses `win_p * (decimal odds - 1) - lose_p`; a push returns

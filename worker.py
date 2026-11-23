@@ -1292,7 +1292,7 @@ def select_arb_alerts(
     history: dict[str, dict[str, Any]],
     now_utc: datetime,
 ) -> list[dict[str, Any]]:
-    """Arbs with ROI of at least 1% and profit of at least $20, no daily cap."""
+    """Arbs with ROI of at least 1% and profit of at least $10, no daily cap."""
     remaining = DAILY_ARB_ALERT_LIMIT - daily_count(history, "arb", now_utc)
     if remaining <= 0:
         return []
@@ -1608,7 +1608,7 @@ def run_worker(
             )
 
     # +EV is Pinnacle-anchored and excludes player props by construction.
-    # The worker applies its own $20 minimum, so the engine's floor is lifted here.
+    # The worker applies its own $10 minimum, so the engine's floor is lifted here.
     scanner_cfg = replace(CONFIG, min_ev_pct=min_ev, min_arb_guaranteed_profit_dollars=0.0)
     scan_res = scan_pinnacle_ev(quotes, config=scanner_cfg, now=now_utc)
     raw_opportunities = [

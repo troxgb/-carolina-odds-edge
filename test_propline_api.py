@@ -128,6 +128,84 @@ class PropLineApiTests(unittest.TestCase):
             quotes[0]["liquidity_updated_at"], "2026-11-13T10:00:00Z"
         )
 
+    def test_parser_drops_suspended_markets_and_pregame_only_books(self):
+        events = [
+            {
+                "id": "event-susp",
+                "home_team": "Home",
+                "away_team": "Away",
+                "bookmakers": [
+                    {
+                        "key": "draftkings",
+                        "markets": [
+                            {
+                                "key": "spreads",
+                                "line_type": "main",
+                                "last_update": "2026-11-23T18:00:00Z",
+                                "suspended_at": "2026-11-23T18:00:00Z",
+                                "outcomes": [
+                                    {
+                                        "name": "Home",
+                                        "side": "home",
+                                        "price": -110,
+                                        "point": -2.5,
+                                    },
+                                    {
+                                        "name": "Away",
+                                        "side": "away",
+                                        "price": -110,
+                                        "point": 2.5,
+                                    },
+                                ],
+                            },
+                            {
+                                "key": "h2h",
+                                "line_type": "main",
+                                "suspended_at": None,
+                                "outcomes": [
+                                    {"name": "Home", "side": "home", "price": -120},
+                                    {"name": "Away", "side": "away", "price": 100},
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "key": "fanduel",
+                        "pregame_only": True,
+                        "markets": [
+                            {
+                                "key": "h2h",
+                                "outcomes": [
+                                    {"name": "Home", "side": "home", "price": -115},
+                                    {"name": "Away", "side": "away", "price": -105},
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "key": "betmgm",
+                        "pregame_only": False,
+                        "markets": [
+                            {
+                                "key": "h2h",
+                                "outcomes": [
+                                    {"name": "Home", "side": "home", "price": -125},
+                                    {"name": "Away", "side": "away", "price": 105},
+                                ],
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+
+        quotes = parse_odds_payload(events, "NFL")
+
+        self.assertEqual(
+            {quote["sportsbook"] for quote in quotes}, {"DraftKings", "BetMGM"}
+        )
+        self.assertEqual({quote["market_key"] for quote in quotes}, {"h2h"})
+
     def test_schedule_filter_uses_current_eastern_time(self):
         now = datetime(2026, 11, 13, 16, 18, tzinfo=EASTERN)
         past_same_day = {

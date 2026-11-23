@@ -350,6 +350,21 @@ def _is_main_line(market: dict[str, Any]) -> bool:
     return str(line_type).strip().casefold() in _KEPT_LINE_TYPES
 
 
+def _market_is_suspended(market: dict[str, Any]) -> bool:
+    """True when the book pulled this market pregame.
+
+    PropLine keeps returning the last quoted legs with ``suspended_at`` set
+    (late scratch, dropped market type). Those legs are not a live price, so
+    they must never become an +EV or arbitrage leg.
+    """
+    return bool(market.get("suspended_at"))
+
+
+def _book_is_pregame_only(bookmaker: dict[str, Any]) -> bool:
+    """True when the event is live and this book no longer prices it in play."""
+    return bookmaker.get("pregame_only") is True
+
+
 def _configured_prop_markets(sport_label: str) -> frozenset[str]:
     sport_key = SPORT_CONFIG.get(sport_label)
     if not sport_key:
@@ -579,6 +594,7 @@ def parse_odds_payload(
             if (
                 not isinstance(bookmaker, dict)
                 or str(bookmaker.get("key", "")).casefold() not in accepted_bookmakers
+                or _book_is_pregame_only(bookmaker)
             ):
                 continue
             bookmaker_key = str(bookmaker["key"]).casefold()
@@ -592,6 +608,8 @@ def parse_odds_payload(
                 if not _supported_market(market_key):
                     continue
                 if not _is_main_line(market):
+                    continue
+                if _market_is_suspended(market):
                     continue
                 if is_player_prop_market(market_key) and (
                     str(market_key).split(":", 1)[0].casefold()
@@ -637,6 +655,7 @@ def parse_odds_payload(
             if (
                 not isinstance(bookmaker, dict)
                 or str(bookmaker.get("key", "")).casefold() not in accepted_bookmakers
+                or _book_is_pregame_only(bookmaker)
             ):
                 continue
             bookmaker_key = str(bookmaker["key"]).casefold()
@@ -653,6 +672,8 @@ def parse_odds_payload(
                 if not _supported_market(market_key):
                     continue
                 if not _is_main_line(market):
+                    continue
+                if _market_is_suspended(market):
                     continue
                 if is_player_prop_market(market_key) and (
                     str(market_key).split(":", 1)[0].casefold()
