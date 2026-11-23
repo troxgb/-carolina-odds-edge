@@ -102,7 +102,6 @@ SPORT_CONFIG = {
     "NCAAB": "basketball_ncaab",
     "MLB": "baseball_mlb",
     "NHL": "hockey_nhl",
-    "Tennis": "tennis",
 }
 
 APPROVED_BOOKMAKERS = {

@@ -66,12 +66,12 @@ from scanner_logic import (
 )
 
 # Master list of sports the worker is allowed to consider. Auto-selection below
-# further restricts this to high-volume Tier 1 sports plus Tennis (Tier 2), and
-# only when they have an upcoming game within the next 7 days. Tier 3 sports
-# (golf, racing, esports, etc.) are never auto-included to avoid thin markets
-# and elevated limit/ban risk; add them here manually if desired.
+# further restricts this to high-volume Tier 1 team sports, and only when they
+# have an upcoming game within the next 7 days. Tennis was dropped because
+# PropLine's start times for it are unreliable by hours. Tier 3 sports (golf,
+# racing, esports, etc.) are never auto-included to avoid thin markets and
+# elevated limit/ban risk; add them here manually if desired.
 ACTIVE_SPORTS = [
-    "Tennis",
     "NCAAB",
     "NBA",
     "WNBA",
@@ -94,7 +94,6 @@ AUTO_INCLUDE_SPORTS = {
     "NCAAB",
     "NHL",
     "UFC",
-    "Tennis",
 }
 
 # How far ahead a sport needs an event to be considered "in season".
@@ -356,9 +355,8 @@ def is_game_started(
     """True when the event is live or within ``guard_minutes`` of kickoff.
 
     The guard exists because provider clocks are not always right: PropLine's
-    team-sport start times can be 30 minutes late and tennis times can be hours
-    off, so treating the advertised kickoff as final let alerts fire for games
-    that were already under way.
+    team-sport start times can be 30 minutes late, so treating the advertised
+    kickoff as final let alerts fire for games that were already under way.
     """
     if not commence_time_str or not isinstance(commence_time_str, str):
         return False
@@ -759,7 +757,7 @@ def format_welcome_guide(greeting_name: str | None = None) -> str:
         f"DraftKings, FanDuel, BetMGM, Fanatics, theScore Bet, Novig, ProphetX, and Pinnacle (reference only).\n"
         f"Arbitrage requires two <b>different</b> books on each leg — Pinnacle is never used as a betting leg.\n\n"
         f"🏟️ <b>Sports We Scan:</b>\n"
-        f"NFL, NCAAF, NBA, WNBA, NCAAB, NHL, Tennis, UFC (when in season). "
+        f"NFL, NCAAF, NBA, WNBA, NCAAB, NHL, UFC (when in season). "
         f"Only sports with upcoming games are scanned to save resources.\n\n"
         f"⚠️ <b>Responsible Gambling:</b>\n"
         f"If betting stops being fun, call 1-800-GAMBLER (24/7, free, confidential).\n\n"
@@ -1410,8 +1408,8 @@ def run_worker(
         scan_sports = list(sports)
     else:
         # Dynamic active-sport selection (cached 6h; ~6 requests/day, quota-counted).
-        # Only Tier 1 + Tennis are ever auto-included, and only when they have an
-        # upcoming game within SPORT_LOOKAHEAD_DAYS. This keeps thin/obscure
+        # Only Tier 1 auto-include sports are ever scanned, and only when they
+        # have an upcoming game within SPORT_LOOKAHEAD_DAYS. This keeps thin/obscure
         # markets (and their limit/ban risk) out of the scan automatically.
         events_cache = _load_cached_json("sport_events_cache.json", 21600)
         events_by_sport: dict[str, list[dict[str, Any]]] = {}

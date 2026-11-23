@@ -846,7 +846,7 @@ class WholeLineBracketAndSdTests(unittest.TestCase):
 
     def test_standard_deviation_is_keyed_by_sport_and_market(self):
         self.assertEqual(_standard_deviation_for_sport("NBA", "totals", CONFIG), 15.0)
-        self.assertIsNone(_standard_deviation_for_sport("Tennis", "spreads", CONFIG))
+        self.assertIsNone(_standard_deviation_for_sport("Golf", "spreads", CONFIG))
         self.assertIsNone(_standard_deviation_for_sport("NBA", "moneyline", CONFIG))
 
     def test_missing_sd_disables_distribution_path_for_that_market(self):

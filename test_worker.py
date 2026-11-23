@@ -46,7 +46,7 @@ class WorkerTests(unittest.TestCase):
     def test_active_sports_configuration(self):
         self.assertEqual(
             ACTIVE_SPORTS,
-            ["Tennis", "NCAAB", "NBA", "WNBA", "NHL", "NFL", "NCAAF", "UFC"],
+            ["NCAAB", "NBA", "WNBA", "NHL", "NFL", "NCAAF", "UFC"],
         )
         self.assertNotIn("MLB", ACTIVE_SPORTS)
 
