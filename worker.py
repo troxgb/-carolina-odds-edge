@@ -715,7 +715,7 @@ def format_telegram_alert(opp: dict[str, Any]) -> str:
     if required is not None:
         min_bet_line = (
             f"\n🔻 <b>Min Bet:</b> ${required:,.2f} "
-            "<i>(Kelly requirement at the quoted price)</i>"
+            "<i>(Kelly requirement, net of exchange fees)</i>"
         )
 
     return (
