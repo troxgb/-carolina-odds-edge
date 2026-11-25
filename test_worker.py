@@ -51,6 +51,19 @@ from propline_api import SPORT_CONFIG
 
 
 class WorkerTests(unittest.TestCase):
+    def setUp(self):
+        # run_worker tests must never touch the real data/bets.db.
+        self._tmp = tempfile.TemporaryDirectory()
+        self._db_patch = patch.dict(
+            os.environ,
+            {"BETS_DB_PATH": os.path.join(self._tmp.name, "test-bets.db")},
+        )
+        self._db_patch.start()
+
+    def tearDown(self):
+        self._db_patch.stop()
+        self._tmp.cleanup()
+
     def test_active_sports_configuration(self):
         self.assertEqual(
             ACTIVE_SPORTS,

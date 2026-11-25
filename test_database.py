@@ -540,12 +540,18 @@ class AlertLedgerTests(unittest.TestCase):
                 conn.execute("SELECT COUNT(*) FROM alert_ledger").fetchone()[0], 0
             )
 
-    def _closing_fixture(self, event_id, scan_id):
+    def _closing_fixture(
+        self,
+        event_id,
+        scan_id,
+        kickoff="2026-01-01T13:00:00Z",
+        quote_time="2026-01-01T12:59:30Z",
+    ):
         opportunity = {
             "sport": "NBA",
             "event_id": event_id,
             "matchup": "Home vs Away",
-            "kickoff": "2026-01-01T13:00:00Z",
+            "kickoff": kickoff,
             "market": "Moneyline",
             "market_key": "h2h",
             "period": "",
@@ -562,8 +568,8 @@ class AlertLedgerTests(unittest.TestCase):
             "pinnacle_american_this_side": -110,
             "pinnacle_american_other_side": -110,
             "pinnacle_overround": 1.0476,
-            "pinnacle_quote_time": "2026-01-01T11:59:30Z",
-            "book_quote_time": "2026-01-01T11:59:30Z",
+            "pinnacle_quote_time": quote_time,
+            "book_quote_time": quote_time,
             "flags": "",
         }
         snapshot = {
@@ -574,14 +580,34 @@ class AlertLedgerTests(unittest.TestCase):
             "team": "",
             "selection": "Home",
             "point": None,
-            "kickoff": "2026-01-01T13:00:00Z",
+            "kickoff": kickoff,
             "fair_probability": 0.55,
             "pinnacle_american": -120,
             "pinnacle_decimal": 1.833333,
             "overround": 1.04,
-            "quote_time": "2026-01-01T12:59:30Z",
+            "quote_time": quote_time,
         }
         database.log_scan(scan_id, "2026-01-01T12:59:35Z", [opportunity], [snapshot])
+
+    def test_finalize_processes_newest_pending_rows_first(self):
+        self._closing_fixture("game-old", "scan-old")
+        self._closing_fixture(
+            "game-new",
+            "scan-new",
+            kickoff="2026-01-02T13:00:00Z",
+            quote_time="2026-01-02T12:59:30Z",
+        )
+        now = datetime(2026, 1, 3, 13, 0, 1, tzinfo=timezone.utc)
+        self.assertEqual(database.finalize_started_opportunities(now, limit=1), 1)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            done = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT event_id FROM ev_opportunity_log "
+                    "WHERE finalized_at IS NOT NULL"
+                )
+            ]
+        self.assertEqual(done, ["game-new"])
 
     def test_finalize_limit_bounds_rows_per_call(self):
         self._closing_fixture("game-a", "scan-a")

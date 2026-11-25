@@ -455,7 +455,9 @@ def finalize_started_opportunities(
             FROM ev_opportunity_log
             WHERE closing_fair_probability IS NULL
               AND commence_time <= ?
-            ORDER BY commence_time
+            -- Recent games are the ones with usable Pinnacle closing quotes.
+            -- Oldest-first would keep re-reading the same unfinalizable rows.
+            ORDER BY commence_time DESC
         """
         params: list = [now_utc]
         if limit is not None and limit > 0:
