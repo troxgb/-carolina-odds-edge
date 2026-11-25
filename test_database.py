@@ -481,5 +481,120 @@ class BetTimestampAndStoredStakeTests(unittest.TestCase):
         self.assertEqual(stored, 0.0)
 
 
+class AlertLedgerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "bets.db")
+        self.path_patch = patch.object(database, "DB_PATH", self.db_path)
+        self.path_patch.start()
+        database.init_db()
+
+    def tearDown(self):
+        self.path_patch.stop()
+        self.temp_dir.cleanup()
+
+    def test_log_alerts_persists_dispatched_rows(self):
+        database.log_alerts(
+            [
+                {
+                    "ts_utc": "2026-11-24T20:00:00+00:00",
+                    "et_band": "peak",
+                    "kind": "ev",
+                    "alert_key": "ev-key",
+                    "sport": "NBA",
+                    "event_id": "game-1",
+                    "market": "Moneyline",
+                    "market_key": "h2h",
+                    "selection": "Home",
+                    "odds_american": 140,
+                    "ev_pct": 5.2,
+                    "executable_ev_pct": 4.8,
+                },
+                {
+                    "ts_utc": "2026-11-25T03:00:00+00:00",
+                    "et_band": "off",
+                    "kind": "arb",
+                    "alert_key": "arb-key",
+                    "sport": "NCAAB",
+                    "event_id": "game-2",
+                    "roi_pct": 2.1,
+                },
+            ]
+        )
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = [dict(r) for r in conn.execute("SELECT * FROM alert_ledger ORDER BY id")]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["et_band"], "peak")
+        self.assertEqual(rows[0]["kind"], "ev")
+        self.assertAlmostEqual(rows[0]["ev_pct"], 5.2)
+        self.assertAlmostEqual(rows[0]["executable_ev_pct"], 4.8)
+        self.assertEqual(rows[1]["et_band"], "off")
+        self.assertEqual(rows[1]["kind"], "arb")
+        self.assertAlmostEqual(rows[1]["roi_pct"], 2.1)
+
+    def test_log_alerts_empty_is_noop(self):
+        database.log_alerts([])
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM alert_ledger").fetchone()[0], 0
+            )
+
+    def _closing_fixture(self, event_id, scan_id):
+        opportunity = {
+            "sport": "NBA",
+            "event_id": event_id,
+            "matchup": "Home vs Away",
+            "kickoff": "2026-01-01T13:00:00Z",
+            "market": "Moneyline",
+            "market_key": "h2h",
+            "period": "",
+            "team": "",
+            "selection": "Home",
+            "sportsbook": "DraftKings",
+            "bookmaker_key": "draftkings",
+            "line": None,
+            "odds_american": 140,
+            "odds_decimal": 2.4,
+            "fair_probability": 0.5,
+            "ev_pct": 20.0,
+            "kelly_stake": 10.0,
+            "pinnacle_american_this_side": -110,
+            "pinnacle_american_other_side": -110,
+            "pinnacle_overround": 1.0476,
+            "pinnacle_quote_time": "2026-01-01T11:59:30Z",
+            "book_quote_time": "2026-01-01T11:59:30Z",
+            "flags": "",
+        }
+        snapshot = {
+            "sport": "NBA",
+            "event_id": event_id,
+            "market_key": "h2h",
+            "period": "",
+            "team": "",
+            "selection": "Home",
+            "point": None,
+            "kickoff": "2026-01-01T13:00:00Z",
+            "fair_probability": 0.55,
+            "pinnacle_american": -120,
+            "pinnacle_decimal": 1.833333,
+            "overround": 1.04,
+            "quote_time": "2026-01-01T12:59:30Z",
+        }
+        database.log_scan(scan_id, "2026-01-01T12:59:35Z", [opportunity], [snapshot])
+
+    def test_finalize_limit_bounds_rows_per_call(self):
+        self._closing_fixture("game-a", "scan-a")
+        self._closing_fixture("game-b", "scan-b")
+        now = datetime(2026, 1, 1, 13, 0, 1, tzinfo=timezone.utc)
+        self.assertEqual(database.finalize_started_opportunities(now, limit=1), 1)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            done = conn.execute(
+                "SELECT COUNT(*) FROM ev_opportunity_log WHERE finalized_at IS NOT NULL"
+            ).fetchone()[0]
+        self.assertEqual(done, 1)
+        self.assertEqual(database.finalize_started_opportunities(now), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

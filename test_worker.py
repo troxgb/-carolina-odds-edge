@@ -696,6 +696,140 @@ class WorkerTests(unittest.TestCase):
             mock_send.assert_not_called()
             self.assertEqual(load_alert_history(hist_file), seed)
 
+    def test_dispatched_alerts_are_ledgered_and_clv_is_finalized(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hist_file = os.path.join(tmpdir, "alert_history.json")
+            cache_file = os.path.join(tmpdir, "cached_odds.json")
+            kickoff = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+            mock_opps = [
+                {
+                    "event_id": "ledger-ev",
+                    "sport": "NBA",
+                    "matchup": "Team A vs Team B",
+                    "market": "Moneyline",
+                    "market_key": "h2h",
+                    "selection": "Team A",
+                    "line": None,
+                    "sportsbook": "FanDuel",
+                    "bookmaker_key": "fanduel",
+                    "odds_american": 150,
+                    "odds_decimal": 2.5,
+                    "fair_probability": 0.52,
+                    "ev_pct": 4.5,
+                    "executable_ev_pct": 4.1,
+                    "kickoff": kickoff,
+                }
+            ]
+            mock_arbs = [
+                {
+                    "event_id": "ledger-arb",
+                    "sport": "NBA",
+                    "matchup": "Team C vs Team D",
+                    "market": "Moneyline",
+                    "kickoff": kickoff,
+                    "total_stake": 500.0,
+                    "profit": 37.2,
+                    "roi_pct": 7.44,
+                    "legs": [
+                        {"selection": "C", "sportsbook": "FanDuel", "odds_decimal": 2.2, "stake": 244.0},
+                        {"selection": "D", "sportsbook": "DraftKings", "odds_decimal": 2.1, "stake": 256.0},
+                    ],
+                }
+            ]
+            with (
+                patch("worker.run_api") as mock_run_api,
+                patch("worker.scan_pinnacle_ev") as mock_scan,
+                patch("worker.find_arbitrage_opportunities") as mock_find_arb,
+                patch("worker.send_telegram_message", return_value=True),
+                patch("worker.persist_alerts_to_ledger") as mock_ledger,
+                patch("worker.finalize_pending_opportunities") as mock_finalize,
+            ):
+                mock_run_api.return_value = {"quotes": [], "errors": [], "warnings": []}
+                mock_scan.return_value = {"opportunities": mock_opps}
+                mock_find_arb.return_value = mock_arbs
+                with patch.dict(
+                    os.environ,
+                    {
+                        "PROPLINE_API_KEY": "test_api_key",
+                        "TELEGRAM_BOT_TOKEN": "bot_token",
+                        "TELEGRAM_CHAT_ID": "chat_id",
+                    },
+                ), patch("worker.in_peak_window", return_value=True), patch(
+                    "worker.alert_band", return_value="peak"
+                ), redirect_stdout(io.StringIO()):
+                    result = run_worker(
+                        sports=["NBA"],
+                        min_ev=3.5,
+                        min_arb_roi=1.0,
+                        history_file=hist_file,
+                        cache_file=cache_file,
+                    )
+
+            self.assertTrue(result["success"])
+            mock_finalize.assert_called_once()
+            mock_ledger.assert_called_once()
+            rows = mock_ledger.call_args.args[0]
+            self.assertEqual([row["kind"] for row in rows], ["ev", "arb"])
+            self.assertEqual(rows[0]["et_band"], "peak")
+            self.assertEqual(rows[0]["alert_key"], "ledger-ev_Moneyline_Team A_None_FanDuel")
+            self.assertAlmostEqual(rows[0]["executable_ev_pct"], 4.1)
+            self.assertAlmostEqual(rows[1]["roi_pct"], 7.1)
+
+    def test_dry_run_neither_ledgers_nor_finalizes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hist_file = os.path.join(tmpdir, "alert_history.json")
+            cache_file = os.path.join(tmpdir, "cached_odds.json")
+            kickoff = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+            mock_opps = [
+                {
+                    "event_id": "dry-ledger",
+                    "sport": "NBA",
+                    "matchup": "Team A vs Team B",
+                    "market": "Moneyline",
+                    "market_key": "h2h",
+                    "selection": "Team A",
+                    "line": None,
+                    "sportsbook": "FanDuel",
+                    "odds_american": 150,
+                    "odds_decimal": 2.5,
+                    "fair_probability": 0.52,
+                    "ev_pct": 4.5,
+                    "kickoff": kickoff,
+                }
+            ]
+            with (
+                patch("worker.run_api") as mock_run_api,
+                patch("worker.scan_pinnacle_ev") as mock_scan,
+                patch("worker.find_arbitrage_opportunities") as mock_find_arb,
+                patch("worker.persist_alerts_to_ledger") as mock_ledger,
+                patch("worker.finalize_pending_opportunities") as mock_finalize,
+            ):
+                mock_run_api.return_value = {"quotes": [], "errors": [], "warnings": []}
+                mock_scan.return_value = {"opportunities": mock_opps}
+                mock_find_arb.return_value = []
+                with patch.dict(
+                    os.environ,
+                    {
+                        "PROPLINE_API_KEY": "test_api_key",
+                        "TELEGRAM_BOT_TOKEN": "bot_token",
+                        "TELEGRAM_CHAT_ID": "chat_id",
+                    },
+                ), patch("worker.in_peak_window", return_value=True), redirect_stdout(
+                    io.StringIO()
+                ):
+                    result = run_worker(
+                        sports=["NBA"],
+                        min_ev=3.5,
+                        min_arb_roi=1.0,
+                        history_file=hist_file,
+                        cache_file=cache_file,
+                        dry_run=True,
+                    )
+
+            self.assertTrue(result["success"])
+            mock_ledger.assert_not_called()
+            mock_finalize.assert_not_called()
+
     def test_get_api_keys_ordering_and_fallback(self):
         with patch.dict(
             os.environ,

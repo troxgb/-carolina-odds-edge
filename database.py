@@ -177,6 +177,38 @@ def init_db():
                 "closing_push_probability": "REAL",
             },
         )
+        # Durable record of alerts that were actually dispatched. Unlike
+        # alert_history.json (48h dedupe cache), this survives long enough to
+        # backtest alert timing and EV floors across weeks.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alert_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_utc TEXT NOT NULL,
+                et_band TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                alert_key TEXT NOT NULL,
+                sport TEXT,
+                event_id TEXT,
+                market TEXT,
+                market_key TEXT,
+                selection TEXT,
+                line REAL,
+                bookmaker_key TEXT,
+                sportsbook TEXT,
+                odds_american INTEGER,
+                ev_pct REAL,
+                executable_ev_pct REAL,
+                roi_pct REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_alert_ledger_ts
+            ON alert_ledger (ts_utc, kind)
+            """
+        )
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_pinnacle_snapshots_close
@@ -230,6 +262,50 @@ def log_bets(bets_data: list[dict]) -> None:
 
 def log_bet(bet_data: dict) -> None:
     log_bets([bet_data])
+
+
+def log_alerts(entries: list[dict]) -> None:
+    """Persist successfully dispatched alerts in one small transaction.
+
+    Called at most once per worker cycle with a handful of rows, so it never
+    grows with the quote count and adds no per-quote memory overhead.
+    """
+    if not entries:
+        return
+    init_db()
+    ts = _now_utc_iso()
+    rows = [
+        (
+            entry.get("ts_utc") or ts,
+            entry.get("et_band", "off"),
+            entry.get("kind", "ev"),
+            entry.get("alert_key", ""),
+            entry.get("sport", ""),
+            entry.get("event_id", ""),
+            entry.get("market", ""),
+            entry.get("market_key", ""),
+            entry.get("selection", ""),
+            entry.get("line"),
+            entry.get("bookmaker_key", ""),
+            entry.get("sportsbook", ""),
+            entry.get("odds_american"),
+            entry.get("ev_pct"),
+            entry.get("executable_ev_pct"),
+            entry.get("roi_pct"),
+        )
+        for entry in entries
+    ]
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.executemany(
+            """
+            INSERT INTO alert_ledger (
+                ts_utc, et_band, kind, alert_key, sport, event_id, market,
+                market_key, selection, line, bookmaker_key, sportsbook,
+                odds_american, ev_pct, executable_ev_pct, roi_pct
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
 
 
 def load_bets() -> pd.DataFrame:
@@ -362,7 +438,10 @@ def log_scan(
         )
 
 
-def finalize_started_opportunities(now: datetime | None = None) -> int:
+def finalize_started_opportunities(
+    now: datetime | None = None, limit: int | None = None
+) -> int:
+    """Finalize settled CLV rows, optionally capped to bound memory per call."""
     init_db()
     now_utc = now or datetime.now(timezone.utc)
     if now_utc.tzinfo is None:
@@ -370,16 +449,19 @@ def finalize_started_opportunities(now: datetime | None = None) -> int:
     now_utc = now_utc.astimezone(timezone.utc).isoformat()
     with closing(sqlite3.connect(DB_PATH)) as conn, conn:
         conn.row_factory = sqlite3.Row
-        opportunities = conn.execute(
-            """
+        sql = """
             SELECT id, sport, event_id, market_key, period, team, selection,
                    commence_time, line, odds_decimal, pricing_method
             FROM ev_opportunity_log
             WHERE closing_fair_probability IS NULL
               AND commence_time <= ?
-            """,
-            (now_utc,),
-        ).fetchall()
+            ORDER BY commence_time
+        """
+        params: list = [now_utc]
+        if limit is not None and limit > 0:
+            sql += " LIMIT ?"
+            params.append(limit)
+        opportunities = conn.execute(sql, params).fetchall()
         finalized = 0
         for opportunity in opportunities:
             snapshots = conn.execute(

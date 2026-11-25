@@ -99,6 +99,9 @@ class ScannerConfig:
     # "verify" flag above verify_ev_pct).
     worker_min_ev_pct: float = 3.5
     worker_max_ev_pct: float | None = None
+    # Spreads were the weakest market in backtests (negative ROI in peak and
+    # off-hours samples). They must clear this higher floor before alerting.
+    spread_min_ev_pct: float = 4.5
     # Arbitrage alerts are shown only when the rounded stakes still guarantee
     # at least this much profit. This is a floor, not a cap.
     min_arb_guaranteed_profit_dollars: float = 10.0

@@ -173,6 +173,9 @@ MAX_ARB_ALERTS_PER_SCAN = 5
 # dedup history and peak window for +EV).
 DAILY_EV_ALERT_LIMIT = 10**9
 DAILY_ARB_ALERT_LIMIT = 10**9
+# Cap the CLV finalization backlog processed per cycle so a large DB never
+# loads an unbounded number of rows into memory.
+FINALIZE_BATCH_SIZE = 500
 
 CANT_MISS_SPORTS = {"nfl", "nba"}
 
@@ -1098,6 +1101,37 @@ def persist_scan_to_database(
         )
 
 
+def finalize_pending_opportunities(observed_at: datetime) -> None:
+    """Finalize a bounded batch of settled CLV rows (never called in dry-run)."""
+    try:
+        import database
+
+        database.DB_PATH = _database_path()
+        finalized = database.finalize_started_opportunities(
+            observed_at, limit=FINALIZE_BATCH_SIZE
+        )
+        if finalized:
+            print(f"Finalized {finalized} settled CLV rows.")
+    except Exception as error:
+        print(f"Warning: Could not finalize CLV rows: {error}", file=sys.stderr)
+
+
+def persist_alerts_to_ledger(entries: list[dict[str, Any]]) -> None:
+    """Write all dispatched alerts in one tiny transaction, not one per quote."""
+    if not entries:
+        return
+    try:
+        import database
+
+        database.DB_PATH = _database_path()
+        database.log_alerts(entries)
+    except Exception as error:
+        print(
+            f"Warning: Could not log alerts to {_database_path()}: {error}",
+            file=sys.stderr,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Prompt/fetch helpers
 # ---------------------------------------------------------------------------
@@ -1359,6 +1393,20 @@ def filter_exchange_capacity_arbs(
 # ---------------------------------------------------------------------------
 
 
+def _is_spread_quote(opportunity: dict[str, Any]) -> bool:
+    """Spread-only check; unlike _is_spread_or_total this excludes totals."""
+    if str(opportunity.get("market_key") or "").casefold() == "spreads":
+        return True
+    return str(opportunity.get("market") or "").casefold().startswith("spread")
+
+
+def ev_floor_for(opportunity: dict[str, Any], min_ev: float) -> float:
+    """Spreads need the larger edge configured in CONFIG.spread_min_ev_pct."""
+    if _is_spread_quote(opportunity):
+        return max(float(min_ev), float(CONFIG.spread_min_ev_pct))
+    return float(min_ev)
+
+
 def in_ev_odds_range(opportunity: dict[str, Any]) -> bool:
     """True when the quoted American odds fall between -150 and +200 inclusive."""
     odds = opportunity.get("odds_american")
@@ -1378,6 +1426,19 @@ def in_peak_window(now_utc: datetime) -> bool:
     if local.weekday() >= 5:  # Saturday or Sunday
         return WEEKEND_PEAK_START_HOUR_ET <= hour < WEEKEND_PEAK_END_HOUR_ET
     return PEAK_START_HOUR_ET <= hour < PEAK_END_HOUR_ET
+
+
+def alert_band(now_utc: datetime) -> str:
+    """Bucket an alert by the ET window it fired in, for the durable ledger."""
+    if in_peak_window(now_utc):
+        return "peak"
+    local = now_utc.astimezone(ET_ZONE)
+    hour, weekday = local.hour, local.weekday()
+    if weekday < 5 and (12 <= hour < 15 or 20 <= hour < 23):
+        return "shoulder"
+    if weekday >= 5 and (7 <= hour < 9 or 23 <= hour < 24):
+        return "shoulder"
+    return "off"
 
 
 def _eastern_date(now_utc: datetime) -> str:
@@ -1794,7 +1855,7 @@ def run_worker(
     valid_opportunities = []
     for opportunity in raw_opportunities:
         ev = float(opportunity.get("ev_pct", 0.0))
-        if ev < min_ev:
+        if ev < ev_floor_for(opportunity, min_ev):
             continue
         if max_ev is not None and ev > max_ev:
             continue
@@ -1876,6 +1937,8 @@ def run_worker(
             scan_res.get("eligible_rows", valid_opportunities),
             snapshots,
         )
+    if not dry_run:
+        finalize_pending_opportunities(now_utc)
 
     history = load_alert_history(history_file)
     initial_history_count = len(history)
@@ -1883,6 +1946,11 @@ def run_worker(
     pruned = initial_history_count - len(history)
     if pruned > 0:
         print(f"Pruned {pruned} alert history entries older than 48 hours.")
+
+    # Only successfully dispatched alerts are ledgered. The list is bounded by
+    # the per-scan caps (at most 8 rows), so it has no meaningful memory cost.
+    ledger_rows: list[dict[str, Any]] = []
+    alert_band_now = alert_band(now_utc)
 
     ev_alerts_sent = 0
     for opportunity in select_ev_alerts(valid_opportunities, history, now_utc)[
@@ -1898,6 +1966,25 @@ def run_worker(
                 ev_alerts_sent += 1
                 history[alert_key] = {"ev": ev, "timestamp": now_ts}
                 increment_daily_count(history, "ev", now_utc, now_ts)
+                ledger_rows.append(
+                    {
+                        "ts_utc": now_utc.isoformat(),
+                        "et_band": alert_band_now,
+                        "kind": "ev",
+                        "alert_key": alert_key,
+                        "sport": opportunity.get("sport"),
+                        "event_id": opportunity.get("event_id"),
+                        "market": opportunity.get("market"),
+                        "market_key": opportunity.get("market_key"),
+                        "selection": opportunity.get("selection"),
+                        "line": opportunity.get("line"),
+                        "bookmaker_key": opportunity.get("bookmaker_key"),
+                        "sportsbook": opportunity.get("sportsbook"),
+                        "odds_american": opportunity.get("odds_american"),
+                        "ev_pct": ev,
+                        "executable_ev_pct": opportunity.get("executable_ev_pct"),
+                    }
+                )
                 if ALERT_SEND_DELAY_SECONDS > 0:
                     time.sleep(ALERT_SEND_DELAY_SECONDS)
             else:
@@ -1923,6 +2010,24 @@ def run_worker(
                 arb_alerts_sent += 1
                 history[arb_key] = {"roi": roi, "timestamp": now_ts}
                 increment_daily_arb_counts(history, arb, now_utc, now_ts)
+                ledger_rows.append(
+                    {
+                        "ts_utc": now_utc.isoformat(),
+                        "et_band": alert_band_now,
+                        "kind": "arb",
+                        "alert_key": arb_key,
+                        "sport": arb.get("sport"),
+                        "event_id": arb.get("event_id"),
+                        "market": arb.get("market"),
+                        "market_key": arb.get("market_key"),
+                        "selection": "",
+                        "line": None,
+                        "bookmaker_key": "",
+                        "sportsbook": "",
+                        "odds_american": None,
+                        "roi_pct": roi,
+                    }
+                )
                 if ALERT_SEND_DELAY_SECONDS > 0:
                     time.sleep(ALERT_SEND_DELAY_SECONDS)
             else:
@@ -1933,6 +2038,7 @@ def run_worker(
             arb_alerts_sent += 1
 
     if not dry_run:
+        persist_alerts_to_ledger(ledger_rows)
         save_alert_history(history, history_file)
     print(
         f"Alert cycle complete. +EV alerts: {ev_alerts_sent}, "

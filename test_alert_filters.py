@@ -130,5 +130,36 @@ class CantMissTests(unittest.TestCase):
         self.assertFalse(worker.is_cant_miss("Spread", "NHL"))
 
 
+class SpreadFloorTests(unittest.TestCase):
+    def test_spreads_need_the_higher_floor(self):
+        spread = {"market_key": "spreads", "market": "Spread -2.5"}
+        self.assertEqual(worker.ev_floor_for(spread, 3.5), 4.5)
+        # A caller-supplied floor above the spread minimum still wins.
+        self.assertEqual(worker.ev_floor_for(spread, 6.0), 6.0)
+
+    def test_other_markets_keep_the_configured_floor(self):
+        moneyline = {"market_key": "h2h", "market": "Moneyline"}
+        total = {"market_key": "totals", "market": "Total 210.5"}
+        self.assertEqual(worker.ev_floor_for(moneyline, 3.5), 3.5)
+        self.assertEqual(worker.ev_floor_for(total, 3.5), 3.5)
+
+    def test_market_text_only_spread_is_recognized(self):
+        self.assertTrue(worker._is_spread_quote({"market": "Spread -1.5"}))
+        self.assertFalse(worker._is_spread_quote({"market": "Total 210.5"}))
+
+
+class AlertBandTests(unittest.TestCase):
+    def test_bands_follow_the_alert_window(self):
+        # Thursday Nov 19, 2026 is an ET weekday (EST = UTC-5).
+        self.assertEqual(worker.alert_band(utc(2026, 11, 19, 20, 0)), "peak")  # 3 PM ET
+        self.assertEqual(worker.alert_band(utc(2026, 11, 19, 17, 30)), "shoulder")  # 12:30 PM ET
+        self.assertEqual(worker.alert_band(utc(2026, 11, 20, 2, 0)), "shoulder")  # 9 PM ET
+        self.assertEqual(worker.alert_band(utc(2026, 11, 20, 7, 0)), "off")  # 2 AM ET
+        # Saturday Nov 21, 2026 is a weekend day.
+        self.assertEqual(worker.alert_band(utc(2026, 11, 21, 14, 0)), "peak")  # 9 AM ET
+        self.assertEqual(worker.alert_band(utc(2026, 11, 21, 12, 0)), "shoulder")  # 7 AM ET
+        self.assertEqual(worker.alert_band(utc(2026, 11, 22, 4, 0)), "shoulder")  # 11 PM ET
+
+
 if __name__ == "__main__":
     unittest.main()
