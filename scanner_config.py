@@ -102,6 +102,13 @@ class ScannerConfig:
     # Spreads were the weakest market in backtests (negative ROI in peak and
     # off-hours samples). They must clear this higher floor before alerting.
     spread_min_ev_pct: float = 4.5
+    # +EV alerts are schedule-driven instead of clock-driven. Each bet belongs
+    # to the 06:00-05:59 ET betting day of its own kickoff. A day's slate opens
+    # this many hours before that day's first game, and a bet must also be
+    # within ev_alert_lead_hours of its own kickoff. The prestart guard still
+    # closes both windows before the game starts.
+    slate_lead_hours: float = 3.0
+    ev_alert_lead_hours: float = 3.0
     # Arbitrage alerts are shown only when the rounded stakes still guarantee
     # at least this much profit. This is a floor, not a cap.
     min_arb_guaranteed_profit_dollars: float = 10.0

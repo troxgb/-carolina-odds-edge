@@ -509,6 +509,7 @@ class AlertLedgerTests(unittest.TestCase):
                     "odds_american": 140,
                     "ev_pct": 5.2,
                     "executable_ev_pct": 4.8,
+                    "minutes_to_kickoff": 117.5,
                 },
                 {
                     "ts_utc": "2026-11-25T03:00:00+00:00",
@@ -529,9 +530,11 @@ class AlertLedgerTests(unittest.TestCase):
         self.assertEqual(rows[0]["kind"], "ev")
         self.assertAlmostEqual(rows[0]["ev_pct"], 5.2)
         self.assertAlmostEqual(rows[0]["executable_ev_pct"], 4.8)
+        self.assertAlmostEqual(rows[0]["minutes_to_kickoff"], 117.5)
         self.assertEqual(rows[1]["et_band"], "off")
         self.assertEqual(rows[1]["kind"], "arb")
         self.assertAlmostEqual(rows[1]["roi_pct"], 2.1)
+        self.assertIsNone(rows[1]["minutes_to_kickoff"])
 
     def test_log_alerts_empty_is_noop(self):
         database.log_alerts([])

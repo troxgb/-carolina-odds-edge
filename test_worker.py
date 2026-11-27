@@ -496,7 +496,7 @@ class WorkerTests(unittest.TestCase):
             cache_file = os.path.join(tmpdir, "cached_odds.json")
 
             future_kickoff = (
-                datetime.now(timezone.utc) + timedelta(hours=3)
+                datetime.now(timezone.utc) + timedelta(hours=2)
             ).isoformat()
             past_kickoff = (
                 datetime.now(timezone.utc) - timedelta(hours=1)
@@ -593,8 +593,7 @@ class WorkerTests(unittest.TestCase):
                         "TELEGRAM_CHAT_ID": "chat_id",
                     },
                 ):
-                    with patch("worker.in_peak_window", return_value=True):
-                      result = run_worker(
+                    result = run_worker(
                         sports=["NBA"],
                         min_ev=3.0,
                         min_arb_roi=1.0,
@@ -618,7 +617,7 @@ class WorkerTests(unittest.TestCase):
             save_alert_history(seed, hist_file)
 
             future_kickoff = (
-                datetime.now(timezone.utc) + timedelta(hours=3)
+                datetime.now(timezone.utc) + timedelta(hours=2)
             ).isoformat()
             mock_opps = [
                 {
@@ -690,10 +689,7 @@ class WorkerTests(unittest.TestCase):
                         "TELEGRAM_CHAT_ID": "chat_id",
                     },
                 ):
-                    with (
-                        patch("worker.in_peak_window", return_value=True),
-                        redirect_stdout(io.StringIO()),
-                    ):
+                    with redirect_stdout(io.StringIO()):
                         result = run_worker(
                             sports=["NBA"],
                             min_ev=3.0,
@@ -713,7 +709,7 @@ class WorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             hist_file = os.path.join(tmpdir, "alert_history.json")
             cache_file = os.path.join(tmpdir, "cached_odds.json")
-            kickoff = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+            kickoff = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
             mock_opps = [
                 {
                     "event_id": "ledger-ev",
@@ -767,7 +763,7 @@ class WorkerTests(unittest.TestCase):
                         "TELEGRAM_BOT_TOKEN": "bot_token",
                         "TELEGRAM_CHAT_ID": "chat_id",
                     },
-                ), patch("worker.in_peak_window", return_value=True), patch(
+                ), patch(
                     "worker.alert_band", return_value="peak"
                 ), redirect_stdout(io.StringIO()):
                     result = run_worker(
@@ -786,13 +782,14 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(rows[0]["et_band"], "peak")
             self.assertEqual(rows[0]["alert_key"], "ledger-ev_Moneyline_Team A_None_FanDuel")
             self.assertAlmostEqual(rows[0]["executable_ev_pct"], 4.1)
+            self.assertTrue(119.0 <= rows[0]["minutes_to_kickoff"] <= 120.0)
             self.assertAlmostEqual(rows[1]["roi_pct"], 7.1)
 
     def test_dry_run_neither_ledgers_nor_finalizes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             hist_file = os.path.join(tmpdir, "alert_history.json")
             cache_file = os.path.join(tmpdir, "cached_odds.json")
-            kickoff = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
+            kickoff = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
             mock_opps = [
                 {
                     "event_id": "dry-ledger",
@@ -827,9 +824,7 @@ class WorkerTests(unittest.TestCase):
                         "TELEGRAM_BOT_TOKEN": "bot_token",
                         "TELEGRAM_CHAT_ID": "chat_id",
                     },
-                ), patch("worker.in_peak_window", return_value=True), redirect_stdout(
-                    io.StringIO()
-                ):
+                ), redirect_stdout(io.StringIO()):
                     result = run_worker(
                         sports=["NBA"],
                         min_ev=3.5,

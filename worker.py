@@ -9,6 +9,10 @@ scan-and-alert cycle so a cron entry can run it on a schedule.
 
 Player props are arbitrage-only. They are never evaluated for +EV, alerted as
 +EV, or logged as Pinnacle +EV/CLV snapshots.
+
++EV alerts follow each bet's own game schedule: a bet must be inside its
++betting day's slate window and within the configured lead of its kickoff.
++Arbitrage alerts remain available around the clock.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import socket
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
@@ -161,6 +165,9 @@ EV_AMERICAN_MAX = 200
 ARB_ROI_MIN_PCT = 1.0
 ARB_MIN_PROFIT_DOLLARS = 10.0  # Minimum guaranteed profit per alerted arb card
 ARB_MAX_TOTAL_STAKE_DOLLARS = 300.0  # Maximum total stake (both legs) per arb card
+# ET clock bands are retained only as a descriptive ledger field. They no
+# longer decide whether a +EV alert may fire; that now follows the slate and
+# the bet's own kickoff.
 PEAK_START_HOUR_ET = 15  # 3:00 PM Eastern (weekdays)
 PEAK_END_HOUR_ET = 20  # 8:00 PM Eastern (exclusive, weekdays)
 WEEKEND_PEAK_START_HOUR_ET = 9  # 9:00 AM Eastern (weekends)
@@ -170,7 +177,7 @@ WEEKEND_PEAK_END_HOUR_ET = 23  # 11:00 PM Eastern (weekends, exclusive)
 MAX_EV_ALERTS_PER_SCAN = 3
 MAX_ARB_ALERTS_PER_SCAN = 5
 # Daily alert caps removed: alert every qualifying opportunity (subject to
-# dedup history and peak window for +EV).
+# dedup history and the schedule window for +EV).
 DAILY_EV_ALERT_LIMIT = 10**9
 DAILY_ARB_ALERT_LIMIT = 10**9
 # Cap the CLV finalization backlog processed per cycle so a large DB never
@@ -192,6 +199,13 @@ def _env_float(name: str, default: float) -> float:
 
 
 ALERT_SEND_DELAY_SECONDS = _env_float("WORKER_ALERT_DELAY_SECONDS", 0.25)
+
+# Schedule-driven +EV alerting. The betting day starts at 06:00 ET so a 1 AM
+# West Coast game stays with the prior evening's slate instead of being treated
+# as tomorrow's game. Both leads are env-tunable without a code change.
+BETTING_DAY_START_HOUR_ET = 6
+SLATE_LEAD_HOURS = _env_float("SLATE_LEAD_HOURS", CONFIG.slate_lead_hours)
+EV_ALERT_LEAD_HOURS = _env_float("EV_ALERT_LEAD_HOURS", CONFIG.ev_alert_lead_hours)
 
 
 def _env_optional_float(name: str, default: float | None) -> float | None:
@@ -1419,24 +1433,119 @@ def in_ev_odds_range(opportunity: dict[str, Any]) -> bool:
     return EV_AMERICAN_MIN <= value <= EV_AMERICAN_MAX
 
 
-def in_peak_window(now_utc: datetime) -> bool:
-    """True during the alert window: 3-8 PM ET on weekdays, 9 AM-11 PM on weekends."""
-    local = now_utc.astimezone(ET_ZONE)
-    hour = local.hour
-    if local.weekday() >= 5:  # Saturday or Sunday
-        return WEEKEND_PEAK_START_HOUR_ET <= hour < WEEKEND_PEAK_END_HOUR_ET
-    return PEAK_START_HOUR_ET <= hour < PEAK_END_HOUR_ET
+@dataclass(frozen=True)
+class EvAlertSlate:
+    """One betting day's +EV alert session."""
+
+    day: str
+    open_at: datetime
+    close_at: datetime
+    first_kickoff: datetime
+    last_kickoff: datetime
+
+
+def _betting_day_start(kickoff_utc: datetime) -> datetime:
+    """Start of the 06:00-05:59 ET betting day containing ``kickoff_utc``."""
+    local = kickoff_utc.astimezone(ET_ZONE)
+    start = local.replace(
+        hour=BETTING_DAY_START_HOUR_ET, minute=0, second=0, microsecond=0
+    )
+    if local < start:
+        start -= timedelta(days=1)
+    return start
+
+
+def _event_kickoff(source: dict[str, Any]) -> datetime | None:
+    return _parse_utc(source.get("kickoff") or source.get("commence_time"))
+
+
+def build_ev_alert_slates(
+    sources: list[dict[str, Any]],
+) -> dict[datetime, EvAlertSlate]:
+    """Build one slate per betting day from this scan's games.
+
+    ``sources`` may mix raw quotes and eligible opportunities. They are
+    deduped by event so a game with many markets is counted once. A candidate
+    is still merged in by the caller if its quote was filtered out.
+    """
+    kickoffs_by_day: dict[datetime, set[datetime]] = {}
+    seen: set[tuple[str, datetime]] = set()
+    for source in sources:
+        kickoff = _event_kickoff(source)
+        if kickoff is None:
+            continue
+        dedupe_key = (str(source.get("event_id") or ""), kickoff)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        kickoffs_by_day.setdefault(_betting_day_start(kickoff), set()).add(kickoff)
+
+    slates: dict[datetime, EvAlertSlate] = {}
+    for day_start, kickoffs in kickoffs_by_day.items():
+        first_kickoff = min(kickoffs)
+        last_kickoff = max(kickoffs)
+        slates[day_start] = EvAlertSlate(
+            day=day_start.date().isoformat(),
+            open_at=first_kickoff - timedelta(hours=SLATE_LEAD_HOURS),
+            close_at=last_kickoff - timedelta(minutes=CONFIG.prestart_guard_minutes),
+            first_kickoff=first_kickoff,
+            last_kickoff=last_kickoff,
+        )
+    return slates
+
+
+def minutes_to_kickoff(
+    opportunity: dict[str, Any], now_utc: datetime
+) -> float | None:
+    """Minutes until the opportunity's own kickoff, or None when unknown."""
+    kickoff = _event_kickoff(opportunity)
+    if kickoff is None:
+        return None
+    return (kickoff - now_utc).total_seconds() / 60.0
+
+
+def in_ev_alert_window(opportunity: dict[str, Any], now_utc: datetime) -> bool:
+    """True inside the per-bet lead/guard window for this game."""
+    minutes = minutes_to_kickoff(opportunity, now_utc)
+    if minutes is None:
+        return False
+    return (
+        CONFIG.prestart_guard_minutes
+        <= minutes
+        <= EV_ALERT_LEAD_HOURS * 60
+    )
+
+
+def ev_alert_eligible(
+    opportunity: dict[str, Any],
+    slates: dict[datetime, EvAlertSlate],
+    now_utc: datetime,
+) -> bool:
+    """True when both the betting-day slate and the per-bet window are open."""
+    kickoff = _event_kickoff(opportunity)
+    if kickoff is None:
+        return False
+    slate = slates.get(_betting_day_start(kickoff))
+    if slate is None:
+        return False
+    if not (slate.open_at <= now_utc <= slate.close_at):
+        return False
+    return in_ev_alert_window(opportunity, now_utc)
 
 
 def alert_band(now_utc: datetime) -> str:
-    """Bucket an alert by the ET window it fired in, for the durable ledger."""
-    if in_peak_window(now_utc):
-        return "peak"
+    """ET clock bucket for the ledger. Diagnostic only; it no longer gates."""
     local = now_utc.astimezone(ET_ZONE)
     hour, weekday = local.hour, local.weekday()
-    if weekday < 5 and (12 <= hour < 15 or 20 <= hour < 23):
-        return "shoulder"
-    if weekday >= 5 and (7 <= hour < 9 or 23 <= hour < 24):
+    if weekday >= 5:  # Saturday or Sunday
+        if WEEKEND_PEAK_START_HOUR_ET <= hour < WEEKEND_PEAK_END_HOUR_ET:
+            return "peak"
+        if 7 <= hour < WEEKEND_PEAK_START_HOUR_ET or hour == WEEKEND_PEAK_END_HOUR_ET:
+            return "shoulder"
+        return "off"
+    if PEAK_START_HOUR_ET <= hour < PEAK_END_HOUR_ET:
+        return "peak"
+    if 12 <= hour < PEAK_START_HOUR_ET or PEAK_END_HOUR_ET <= hour < 23:
         return "shoulder"
     return "off"
 
@@ -1504,10 +1613,16 @@ def select_ev_alerts(
     candidates: list[dict[str, Any]],
     history: dict[str, dict[str, Any]],
     now_utc: datetime,
+    slates: dict[datetime, EvAlertSlate] | None = None,
 ) -> list[dict[str, Any]]:
-    """Best +EV bets only: peak window, one book per bet, daily cap."""
-    if not in_peak_window(now_utc):
-        return []
+    """Best +EV bets inside the betting-day slate and per-bet window."""
+    if slates is None:
+        slates = build_ev_alert_slates(candidates)
+    candidates = [
+        opportunity
+        for opportunity in candidates
+        if ev_alert_eligible(opportunity, slates, now_utc)
+    ]
     remaining = DAILY_EV_ALERT_LIMIT - daily_count(history, "ev", now_utc)
     if remaining <= 0:
         return []
@@ -1633,6 +1748,16 @@ def run_worker(
         config_errors.append("min_arb_roi must be >= 0.")
     if not math.isfinite(max_bet_cap) or max_bet_cap < 1:
         config_errors.append("MAX_SINGLE_BET must be >= 1.")
+    if not math.isfinite(SLATE_LEAD_HOURS) or SLATE_LEAD_HOURS < 0:
+        config_errors.append("SLATE_LEAD_HOURS must be a finite number >= 0.")
+    if (
+        not math.isfinite(EV_ALERT_LEAD_HOURS)
+        or EV_ALERT_LEAD_HOURS * 60 <= CONFIG.prestart_guard_minutes
+    ):
+        config_errors.append(
+            "EV_ALERT_LEAD_HOURS must be a finite number greater than "
+            "prestart_guard_minutes."
+        )
     if config_errors:
         for error in config_errors:
             print(f"CONFIG ERROR: {error}", file=sys.stderr)
@@ -1952,12 +2077,42 @@ def run_worker(
     ledger_rows: list[dict[str, Any]] = []
     alert_band_now = alert_band(now_utc)
 
+    # Build the schedule map from the full scan, not just +EV candidates, so a
+    # betting day's open/close reflects its actual first and last games. The
+    # candidates are merged in as a fallback in case a quote was filtered.
+    ev_slates = build_ev_alert_slates([*quotes, *valid_opportunities])
+    active_slates = [
+        slate
+        for slate in ev_slates.values()
+        if slate.open_at <= now_utc <= slate.close_at
+    ]
+    if active_slates:
+        active_slate = min(active_slates, key=lambda slate: slate.close_at)
+        print(
+            "EV slate active: "
+            f"{active_slate.day} "
+            f"(open {active_slate.open_at.astimezone(ET_ZONE):%H:%M} ET, "
+            f"close {active_slate.close_at.astimezone(ET_ZONE):%H:%M} ET)."
+        )
+    else:
+        print("EV slate: no active slate this cycle.")
+    in_window = sum(
+        1
+        for opportunity in valid_opportunities
+        if ev_alert_eligible(opportunity, ev_slates, now_utc)
+    )
+    print(
+        f"{in_window} of {len(valid_opportunities)} eligible +EV opportunities "
+        "are inside the slate window."
+    )
+
     ev_alerts_sent = 0
-    for opportunity in select_ev_alerts(valid_opportunities, history, now_utc)[
-        :MAX_EV_ALERTS_PER_SCAN
-    ]:
+    for opportunity in select_ev_alerts(
+        valid_opportunities, history, now_utc, ev_slates
+    )[:MAX_EV_ALERTS_PER_SCAN]:
         alert_key = build_alert_key(opportunity)
         ev = float(opportunity.get("ev_pct", 0.0))
+        kickoff_minutes = minutes_to_kickoff(opportunity, now_utc)
 
         message = format_telegram_alert(opportunity)
         if alerts_configured and not dry_run:
@@ -1983,6 +2138,11 @@ def run_worker(
                         "odds_american": opportunity.get("odds_american"),
                         "ev_pct": ev,
                         "executable_ev_pct": opportunity.get("executable_ev_pct"),
+                        "minutes_to_kickoff": (
+                            round(kickoff_minutes, 1)
+                            if kickoff_minutes is not None
+                            else None
+                        ),
                     }
                 )
                 if ALERT_SEND_DELAY_SECONDS > 0:

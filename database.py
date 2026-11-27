@@ -203,6 +203,11 @@ def init_db():
             )
             """
         )
+        _ensure_columns(
+            conn,
+            "alert_ledger",
+            {"minutes_to_kickoff": "REAL"},
+        )
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_alert_ledger_ts
@@ -292,6 +297,7 @@ def log_alerts(entries: list[dict]) -> None:
             entry.get("ev_pct"),
             entry.get("executable_ev_pct"),
             entry.get("roi_pct"),
+            entry.get("minutes_to_kickoff"),
         )
         for entry in entries
     ]
@@ -301,8 +307,9 @@ def log_alerts(entries: list[dict]) -> None:
             INSERT INTO alert_ledger (
                 ts_utc, et_band, kind, alert_key, sport, event_id, market,
                 market_key, selection, line, bookmaker_key, sportsbook,
-                odds_american, ev_pct, executable_ev_pct, roi_pct
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                odds_american, ev_pct, executable_ev_pct, roi_pct,
+                minutes_to_kickoff
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
