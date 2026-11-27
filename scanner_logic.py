@@ -553,6 +553,22 @@ def _american_price_to_decimal(value: Any) -> float | None:
     return None
 
 
+# Depth levels at or below this American price are placeholder/erroneous
+# quotes (the feed emits levels like -10000 and -25000), not fillable size.
+MIN_PLAUSIBLE_DEPTH_AMERICAN = -1000
+
+
+def _usable_depth_price(value: Any) -> float | None:
+    """Decimal odds for a depth level, or None when the price is implausible."""
+    try:
+        american = int(value)
+    except (TypeError, ValueError):
+        return None
+    if american <= MIN_PLAUSIBLE_DEPTH_AMERICAN:
+        return None
+    return _american_price_to_decimal(american)
+
+
 def executable_odds_for_stake(
     quote: dict[str, Any], target_stake: float
 ) -> dict[str, Any]:
@@ -590,7 +606,7 @@ def executable_odds_for_stake(
         for level in depth:
             if not isinstance(level, dict) or remaining <= 1e-9:
                 continue
-            price = _american_price_to_decimal(level.get("price"))
+            price = _usable_depth_price(level.get("price"))
             level_size = _finite_positive(level.get("size"))
             if price is None or price <= 1 or level_size is None:
                 continue
@@ -600,12 +616,12 @@ def executable_odds_for_stake(
             levels_used += 1
         if remaining > 1e-9:
             # Past the last published level the price is unknown. Value the
-            # remainder at the worst published level, never at the top price.
+            # remainder at the worst usable level, never at the top price.
             worst = quoted
             for level in depth:
                 if not isinstance(level, dict):
                     continue
-                price = _american_price_to_decimal(level.get("price"))
+                price = _usable_depth_price(level.get("price"))
                 if price is not None and 1 < price < worst:
                     worst = price
             total_return += remaining * worst

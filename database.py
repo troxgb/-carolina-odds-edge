@@ -145,6 +145,10 @@ def init_db():
                 win_probability REAL,
                 lose_probability REAL,
                 push_probability REAL,
+                executable_ev_pct REAL,
+                liquidity REAL,
+                execution_levels_used INTEGER,
+                execution_size_unknown INTEGER,
                 closing_fair_probability REAL,
                 closing_quote_time TEXT,
                 clv_pct REAL,
@@ -172,6 +176,10 @@ def init_db():
                 "win_probability": "REAL",
                 "lose_probability": "REAL",
                 "push_probability": "REAL",
+                "executable_ev_pct": "REAL",
+                "liquidity": "REAL",
+                "execution_levels_used": "INTEGER",
+                "execution_size_unknown": "INTEGER",
                 "closing_win_probability": "REAL",
                 "closing_lose_probability": "REAL",
                 "closing_push_probability": "REAL",
@@ -399,10 +407,11 @@ def log_scan(
                 pinnacle_overround, pinnacle_quote_time, book_quote_time, flags,
                 pricing_method, line_adjustment_method, pinnacle_line,
                 pinnacle_lines_used, win_probability, lose_probability,
-                push_probability
+                push_probability, executable_ev_pct, liquidity,
+                execution_levels_used, execution_size_unknown
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             """,
             [
@@ -439,6 +448,10 @@ def log_scan(
                     row.get("win_probability"),
                     row.get("lose_probability"),
                     row.get("push_probability"),
+                    row.get("executable_ev_pct"),
+                    row.get("liquidity"),
+                    row.get("execution_levels_used"),
+                    row.get("execution_size_unknown"),
                 )
                 for row in opportunities
             ],
@@ -675,7 +688,9 @@ def load_opportunity_log() -> pd.DataFrame:
                    pinnacle_line, pinnacle_lines_used, pricing_method,
                    line_adjustment_method, fair_probability, win_probability,
                    lose_probability, push_probability,
-                   ev_pct, kelly_stake, pinnacle_american_this_side,
+                   executable_ev_pct, liquidity, execution_levels_used,
+                   execution_size_unknown, ev_pct, kelly_stake,
+                   pinnacle_american_this_side,
                    pinnacle_american_other_side, pinnacle_overround,
                    pinnacle_quote_time, book_quote_time, flags,
                    closing_fair_probability, closing_quote_time, clv_pct,

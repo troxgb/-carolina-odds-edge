@@ -1411,6 +1411,52 @@ class ExecutableOddsTests(unittest.TestCase):
         self.assertEqual(result["levels_used"], 2)
         self.assertTrue(result["size_unknown"])
 
+    def test_implausible_depth_levels_are_ignored(self):
+        result = executable_odds_for_stake(
+            {
+                "odds_decimal": 2.30,
+                "liquidity": 50.0,
+                "depth": [
+                    {"price": -25000, "size": 1000.0},
+                    {"price": 128, "size": 200.0},
+                ],
+            },
+            100.0,
+        )
+        # 50 @ 2.30 + 50 @ 2.28 = 229 / 100 = 2.29; the -25000 level is junk.
+        self.assertAlmostEqual(result["executable_decimal"], 2.29, places=9)
+        self.assertEqual(result["levels_used"], 1)
+        self.assertFalse(result["size_unknown"])
+
+    def test_depth_at_minus_one_thousand_is_ignored(self):
+        result = executable_odds_for_stake(
+            {
+                "odds_decimal": 2.0,
+                "liquidity": 10.0,
+                "depth": [{"price": -1000, "size": 100.0}],
+            },
+            100.0,
+        )
+        self.assertEqual(result["levels_used"], 0)
+        self.assertAlmostEqual(result["executable_decimal"], 2.0, places=9)
+        self.assertTrue(result["size_unknown"])
+
+    def test_depth_just_above_minus_one_thousand_is_used(self):
+        result = executable_odds_for_stake(
+            {
+                "odds_decimal": 2.0,
+                "liquidity": 10.0,
+                "depth": [{"price": -999, "size": 100.0}],
+            },
+            100.0,
+        )
+        self.assertEqual(result["levels_used"], 1)
+        self.assertAlmostEqual(
+            result["executable_decimal"],
+            (10 * 2.0 + 90 * (1 + 100 / 999)) / 100,
+            places=9,
+        )
+
     def test_scan_reports_executable_ev_below_headline_ev(self):
         quotes = two_way_quotes(book_a=2.5)
         quotes[2]["liquidity"] = 40.0

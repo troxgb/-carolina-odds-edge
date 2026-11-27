@@ -354,6 +354,66 @@ class ClvEdgeSummaryTests(unittest.TestCase):
         self.assertIn("event_id", log.columns)
         self.assertIn("commence_time", log.columns)
 
+    def test_init_db_includes_fill_quality_columns(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "b.db")
+            with patch.object(database, "DB_PATH", db_path):
+                database.init_db()
+            with closing(sqlite3.connect(db_path)) as conn:
+                columns = {
+                    row[1]
+                    for row in conn.execute("PRAGMA table_info(ev_opportunity_log)")
+                }
+        for name in (
+            "executable_ev_pct",
+            "liquidity",
+            "execution_levels_used",
+            "execution_size_unknown",
+        ):
+            self.assertIn(name, columns)
+
+    def test_scan_log_persists_fill_quality_fields(self):
+        opportunity = {
+            "sport": "NCAAF",
+            "event_id": "game-exec",
+            "matchup": "Home vs Away",
+            "kickoff": "2026-01-01T13:00:00Z",
+            "market": "Total 49.5 (Home team)",
+            "market_key": "totals",
+            "period": "",
+            "team": "Home",
+            "selection": "Over",
+            "sportsbook": "ProphetX",
+            "bookmaker_key": "prophetx",
+            "line": 49.5,
+            "odds_american": 134,
+            "odds_decimal": 2.34,
+            "fair_probability": 0.45,
+            "ev_pct": 5.0,
+            "executable_ev_pct": 3.2,
+            "liquidity": 42.5,
+            "execution_levels_used": 2,
+            "execution_size_unknown": True,
+            "kelly_stake": 10.0,
+            "pinnacle_american_this_side": -120,
+            "pinnacle_american_other_side": 110,
+            "pinnacle_overround": 1.04,
+            "pinnacle_quote_time": "2026-01-01T11:59:30Z",
+            "book_quote_time": "2026-01-01T11:59:30Z",
+            "flags": "",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "b.db")
+            with patch.object(database, "DB_PATH", db_path):
+                database.log_scan(
+                    "scan-exec", "2026-01-01T11:59:35Z", [opportunity], []
+                )
+                log = database.load_opportunity_log()
+        self.assertAlmostEqual(log.loc[0, "executable_ev_pct"], 3.2)
+        self.assertAlmostEqual(log.loc[0, "liquidity"], 42.5)
+        self.assertEqual(log.loc[0, "execution_levels_used"], 2)
+        self.assertEqual(log.loc[0, "execution_size_unknown"], 1)
+
 
 class BetClvBasisTests(unittest.TestCase):
     def setUp(self):
